@@ -28,7 +28,7 @@ def _gap_threshold(cfg):
     return int(cfg.get("ws", {}).get("gap_alert_threshold", 5))
 
 def _track_gap(name, ok, cfg):
-    """更新某源连续失败计数,并在达到阈值时告警一次(恢复后提示)。"""
+    """更新某源连续失败计数,并在达到阈值时告警一次(日志+可选企微,恢复后提示)。"""
     if ok:
         if _ws_gap_counters.get(name, 0) > 0:
             log.info(f"[WS] {name} 已恢复(此前连续失败 {_ws_gap_counters[name]} 周期)")
@@ -38,7 +38,20 @@ def _track_gap(name, ok, cfg):
     _ws_gap_counters[name] = _ws_gap_counters.get(name, 0) + 1
     if _ws_gap_counters[name] >= _gap_threshold(cfg) and name not in _GAP_ALERTED:
         _GAP_ALERTED.add(name)
-        log.warning(f"[WS] {name} 连续 {_ws_gap_counters[name]} 周期无数据/异常，疑似采集缺口，请检查")
+        msg = f"⚠️ 采集缺口告警\n{name} 连续 {_ws_gap_counters[name]} 周期无数据/异常，疑似采集中断，请检查"
+        log.warning(f"[WS] {msg}")
+        _send_gap_alert(cfg, msg)
+
+def _send_gap_alert(cfg, msg):
+    """缺口告警走企微 main_key(失败不抛异常,不影响调度)。需要 notify.alert.gap_recipient 配置。"""
+    try:
+        wh = cfg.get("notify", {}).get("webhook", {})
+        rcpt = cfg.get("notify", {}).get("alert", {}).get("gap_recipient", [])
+        key = wh.get("main_key")
+        if key:
+            notify._send_text(key, rcpt, msg)
+    except Exception:
+        log.exception("[gap] 企微缺口告警发送失败")
 
 def _now(cfg):
     return datetime.datetime.now(ZoneInfo(cfg["schedule"]["timezone"]))
@@ -51,22 +64,37 @@ def ws_job(cfg, pool):
         return
     now_str = now.strftime("%Y-%m-%d %H:%M")
     futs = {pool.submit(ws_mod.collect_one, s, cfg): s for s in subs_in}
-    ok, fail_names = [], []
+    ok, failed = [], []
     for f in as_completed(futs):
         s = futs[f]
         try:
             val = f.result()
             if val is None:
-                fail_names.append(f"{s['name']}(无数据)")
-                _track_gap(s["name"], False, cfg)
+                failed.append(s)
                 continue
             storage.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
             ok.append(s["name"])
-            _track_gap(s["name"], True, cfg)
         except Exception:
-            fail_names.append(f"{s['name']}(异常)")
-            _track_gap(s["name"], False, cfg)
-            log.warning(f"[WS] {s['name']} 采集异常", exc_info=True)
+            failed.append(s)
+            log.warning(f"[WS] {s['name']} 采集异常(首轮)", exc_info=True)
+    # 缺口重试补采:对失败源延迟 backfill_retry_delay 秒再采一次,仍失败才记 fail
+    if failed:
+        delay = cfg.get("ws", {}).get("backfill_retry_delay", 5)
+        log.info(f"[WS] 周期 {now_str} {len(failed)} 源首轮失败,延迟 {delay}s 补采: {','.join(s['name'] for s in failed)}")
+        time.sleep(delay)
+        for s in failed:
+            try:
+                val = ws_mod.collect_one(s, cfg)
+                if val is None:
+                    raise ValueError("无数据")
+                storage.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
+                ok.append(s["name"])
+                _track_gap(s["name"], True, cfg)
+                log.info(f"[WS] {s['name']} 补采成功")
+            except Exception:
+                _track_gap(s["name"], False, cfg)
+                log.warning(f"[WS] {s['name']} 补采仍失败")
+    fail_names = [f"{s['name']}(补采失败)" for s in failed if s['name'] not in ok]
     log.info(f"[WS] 周期 {now_str} 成功={','.join(ok) or '无'} 失败={','.join(fail_names) or '无'} (in-window={len(subs_in)})")
     try:
         notify.check_alerts(cfg)
@@ -90,6 +118,9 @@ def detail_job(cfg, pool):
             counts = f.result()
             storage.insert(n, {"时间": now_str, **counts}, cfg["storage"]["dir"])
             ok.append(n)
+        except detail_mod.EmptyDownloadError as e:
+            fail_names.append(f"{n}(空表)")
+            log.warning(f"[detail] {n} 空表,跳过写入(防覆盖): {e}")
         except Exception:
             fail_names.append(n)
             log.warning(f"[detail] {n} 采集异常", exc_info=True)

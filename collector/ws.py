@@ -2,6 +2,7 @@
 """WS 每周期采集:连->发cmd->收首个匹配帧->提取指标->关。提取器复用 v14。"""
 import json
 import logging
+import time
 import websocket
 from websocket import WebSocketTimeoutException
 
@@ -79,6 +80,7 @@ def collect_one(sub, cfg):
     screen = sub["screen"]; skill = sub.get("skill")
     extract = _make_extractor(screen, skill, sub["name"])
     w = cfg["ws"]
+    backoff = w.get("retry_backoff_base", 2)
     for attempt in range(w["retry"] + 1):
         ws = None
         try:
@@ -101,6 +103,8 @@ def collect_one(sub, cfg):
             return None
         except Exception:
             if attempt < w["retry"]:
+                if backoff > 0:
+                    time.sleep(backoff ** attempt)  # 指数退避: 1,2,4,8...
                 continue
             return None
         finally:

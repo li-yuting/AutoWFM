@@ -28,3 +28,17 @@ def insert(source, values, data_dir):
         conn.commit()
     finally:
         conn.close()
+
+def ensure_index(source, data_dir):
+    """为某源建「时间」列索引,加速看板按日/月前缀查询。启动时调用一次,幂等。
+    直接调 insert 的测试/回填不建索引(功能仍正常),仅查询性能优化。"""
+    cols = SCHEMAS[source]
+    path = Path(data_dir) / f"{source}.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        col_def = ",".join(f'"{c}" {"TEXT" if c=="时间" else "INTEGER"}' for c in cols)
+        conn.execute(f'CREATE TABLE IF NOT EXISTS t ({col_def})')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_t_time ON t("时间")')
+        conn.commit()
+    finally:
+        conn.close()

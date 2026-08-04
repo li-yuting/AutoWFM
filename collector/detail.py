@@ -13,6 +13,9 @@ def count_groups(df, fcfg):
     cnt = d.groupby(fcfg["group_column"]).size().to_dict()
     return {g: int(cnt.get(g, 0)) for g in fcfg["groups"]}
 
+class EmptyDownloadError(Exception):
+    """下载的 Excel 无有效数据行(空表),避免覆盖真实数据。"""
+
 def _parse_excel(content):
     if content[:4] == b'PK\x03\x04':
         engine = "openpyxl"
@@ -34,4 +37,6 @@ def download_and_count(mode_name, mcfg, secrets, today_str, timeout):
     resp = requests.post(mcfg["url"], json=data, timeout=timeout)
     resp.raise_for_status()
     df = _parse_excel(resp.content)
+    if df.empty:
+        raise EmptyDownloadError(f"{mode_name} 下载的 Excel 为空表({today_str})")
     return count_groups(df, mcfg["filter"])
