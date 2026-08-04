@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="300">
+<title>好分期客户体验中心 · 实时看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+/* ===== 主题变量：暗色默认 + [data-theme="light"] 覆盖 ===== */
+:root{
+  --bg:#0b0f17;
+  --bg-grad:radial-gradient(1200px 600px at 85% -10%,rgba(99,102,241,.16),transparent 55%);
+  --surface:#141b2b; --surface-2:#1b2436;
+  --border:rgba(255,255,255,.08);
+  --text:#e6edf3; --text-muted:#8b97a8; --text-dim:#5f6b7d;
+  --accent:#6366f1; --accent-2:#818cf8;
+  --c-hotline:#3b82f6; --c-online:#06b6d4; --c-12378:#a855f7; --c-second:#f59e0b;
+  --success:#22c55e; --warning:#f59e0b; --danger:#ef4444;
+  --grid:rgba(255,255,255,.06); --tick:#8b97a8;
+  --line-solid:#f8fafc; --line-dash:rgba(248,250,252,.5);
+  --header-bg:rgba(20,27,43,.72);
+  --shadow:0 8px 24px rgba(0,0,0,.45); --shadow-sm:0 2px 10px rgba(0,0,0,.3);
+  --radius:14px; --radius-sm:10px;
+  --focus-ring:0 0 0 3px rgba(99,102,241,.18);
+}
+[data-theme="light"]{
+  --bg:#eef1f7;
+  --bg-grad:radial-gradient(1200px 600px at 85% -10%,rgba(99,102,241,.12),transparent 55%);
+  --surface:#fff; --surface-2:#f4f6fb;
+  --border:rgba(15,23,42,.10);
+  --text:#0f172a; --text-muted:#64748b; --text-dim:#94a3b8;
+  --accent:#4f46e5; --accent-2:#6366f1;
+  --grid:rgba(15,23,42,.08); --tick:#64748b;
+  --line-solid:#0f172a; --line-dash:rgba(15,23,42,.4);
+  --header-bg:rgba(255,255,255,.82);
+  --shadow:0 6px 20px rgba(15,23,42,.10); --shadow-sm:0 2px 10px rgba(15,23,42,.06);
+  /* 维度色 / 语义色在亮色模式保持不变 */
+}
+
+/* ===== 基础：深空蓝黑底 + 右上角靛蓝径向光晕 ===== */
+*{ box-sizing:border-box; }
+body{
+  margin:0; padding:16px;
+  background-color:var(--bg);
+  background-image:var(--bg-grad);
+  background-repeat:no-repeat; background-attachment:fixed;
+  color:var(--text);
+  font-family:"Microsoft YaHei",system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC",sans-serif;
+  -webkit-font-smoothing:antialiased;
+  transition:background-color .3s ease,color .3s ease;
+}
+h2{ border-left:4px solid var(--accent); padding-left:10px; margin:18px 0 10px; font-size:16px; color:var(--text); }
+
+/* ===== 页头：半透 + 毛玻璃 ===== */
+.app-header{
+  position:sticky; top:0; z-index:20;
+  display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  padding:12px 16px; margin-bottom:12px;
+  background:var(--header-bg);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--border); border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);
+}
+.logo{
+  padding:6px 14px; border-radius:var(--radius-sm);
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  color:#fff; font-weight:700; letter-spacing:.5px; white-space:nowrap;
+}
+.controls{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.time-tag{ margin-left:auto; display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); font-size:12px; }
+.field,.btn{
+  background:var(--surface-2); color:var(--text);
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:7px 12px; outline:none; cursor:pointer; font-size:13px;
+  transition:border-color .15s ease,box-shadow .15s ease;
+}
+.field:hover,.btn:hover{ border-color:var(--accent); }
+.field:focus,.btn:focus{ border-color:var(--accent); box-shadow:var(--focus-ring); }
+.btn-primary{ background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#fff; border:none; }
+.theme-toggle{ margin-left:4px; }
+.live-dot{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--success); animation:pulse 1.8s infinite; }
+@keyframes pulse{
+  0%{ box-shadow:0 0 0 0 rgba(34,197,94,.6); }
+  70%{ box-shadow:0 0 0 8px rgba(34,197,94,0); }
+  100%{ box-shadow:0 0 0 0 rgba(34,197,94,0); }
+}
+
+/* ===== 卡片 / 图表容器：左侧 4px 维度色强调条 ===== */
+.panel{
+  position:relative; background:var(--surface);
+  border:1px solid var(--border); border-radius:var(--radius);
+  padding:12px; box-shadow:var(--shadow-sm); --ch:var(--accent);
+}
+.panel::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:4px;
+  background:var(--ch); border-radius:var(--radius) 0 0 var(--radius);
+}
+.dim-hotline{ --ch:var(--c-hotline); }
+.dim-online { --ch:var(--c-online);  }
+.dim-12378  { --ch:var(--c-12378);   }
+.dim-second { --ch:var(--c-second);  }
+
+/* ===== 第一部分 卡片 ===== */
+.section{ margin:8px 0 14px; }
+.section-title{ font-weight:bold; margin:6px 0; color:var(--text); }
+.grp-row{ display:flex; gap:10px; flex-wrap:wrap; }
+.grp-card{ flex:1 1 0; min-width:180px; }
+.grp-title{ font-weight:bold; text-align:center; margin-bottom:8px; color:var(--text); }
+.grp-body-in{ display:flex; flex-wrap:wrap; }
+.grp-body-in .metric{ flex:0 0 33.333%; padding:2px 0; text-align:center; }
+.grp-body-out{ display:flex; flex-wrap:wrap; }
+.grp-body-out .metric{ flex:1 1 0; min-width:64px; padding:2px 0; text-align:center; }
+.metric .v{ font-size:18px; font-weight:bold; color:var(--text); }
+.metric .l{ font-size:11px; color:var(--text-muted); }
+.nodata-box{ color:var(--text-dim); text-align:center; padding:16px; }
+
+/* ===== 图表 ===== */
+.chart-row{ display:flex; gap:10px; margin:8px 0; flex-wrap:wrap; }
+.chart-cell{ flex:1 1 0; min-width:240px; }
+.chart-title{ font-weight:bold; text-align:center; margin-bottom:6px; color:var(--text); }
+.chart{ height:360px; position:relative; }
+
+/* ===== 表格 ===== */
+.table-wrap{ overflow:auto; max-height:480px; border:1px solid var(--border); border-radius:var(--radius-sm); }
+table{ border-collapse:collapse; background:var(--surface); width:100%; font-size:12px; table-layout:fixed; }
+th,td{ border:1px solid var(--border); padding:5px 7px; text-align:center; word-break:break-word; }
+thead th{ background:var(--c-hotline); color:#fff; font-weight:600; position:sticky; z-index:2; }
+thead tr:first-child th{ top:0; height:28px; }
+thead tr:nth-child(2) th{ top:28px; }
+thead th:first-child{ left:0; z-index:3; }
+tbody tr:nth-child(odd){ background:var(--surface-2); }
+tbody tr:hover{ background:rgba(99,102,241,.15); }
+td:first-child{ position:sticky; left:0; background:var(--surface); font-weight:bold; z-index:1; }
+/* 流入率/接通率 阈值高亮：< 下限红、> 上限绿 */
+.metric .v.text-danger, td.text-danger{ color:var(--danger); }
+.metric .v.text-success, td.text-success{ color:var(--success); }
+</style>
+</head>
+<body>
+<header class="app-header">
+  <div class="logo">好分期客户体验中心 · 实时看板</div>
+  <form class="controls" method="get">
+    <select name="view" class="field">
+      <option value="day" {% if view=='day' %}selected{% endif %}>日视图</option>
+      <option value="month" {% if view=='month' %}selected{% endif %}>月视图</option>
+    </select>
+    <input type="{% if view=='month' %}month{% else %}date{% endif %}" name="date" value="{{ date }}" class="field">
+    <button type="submit" class="btn btn-primary">查看</button>
+    <span class="time-tag"><span class="live-dot"></span>数据时间：{{ date }}{% if data.current_hour is not none %} {{ data.current_hour }}点{% endif %}</span>
+  </form>
+  <button type="button" class="btn theme-toggle" id="themeToggle">🌙 深色</button>
+</header>
+
+<h2>累计数据</h2>
+{% for cat, title, bodycls in [('inbound','接听（呼入）','grp-body-in'),('outbound','外呼','grp-body-out')] %}
+<div class="section">
+  <div class="section-title">{{ title }}</div>
+  {% if data.card[cat] %}
+  <div class="grp-row">
+    {% for gname, gmetrics in data.card[cat].groups.items() %}
+    {% set dim = {'热线':'dim-hotline','在线':'dim-online','12378':'dim-12378'}.get(gname, 'dim-second') %}
+    <div class="grp-card panel {{ dim }}">
+      <div class="grp-title">{{ gname }}</div>
+      <div class="{{ bodycls }}">
+        {% for k, v in gmetrics.items() %}
+        <div class="metric"><div class="v {{ v|rate_class(k) }}">{{ v if v is not none else '-' }}</div><div class="l">{{ k }}</div></div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="panel nodata-box">无数据</div>{% endif %}
+</div>
+{% endfor %}
+
+<h2>一线承接数据展示</h2>
+<div class="chart-row">
+  {% for name, group in data.inbound.items() %}
+  {% set dim = {'热线':'dim-hotline','在线':'dim-online','12378':'dim-12378'}.get(name, 'dim-second') %}
+  <div class="chart-cell panel {{ dim }}">
+    <div class="chart-title">{{ name }}</div>
+    <div class="chart"><canvas id="chart_in_{{ name }}"></canvas></div>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>二线转接&回访数据展示</h2>
+<div class="chart-row">
+  {% for name, group in data.outbound.items() %}
+  <div class="chart-cell panel dim-second">
+    <div class="chart-title">{{ name }}</div>
+    <div class="chart"><canvas id="chart_out_{{ name }}"></canvas></div>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>时段明细表</h2>
+{% for cat, title in [('inbound','接听时段明细'),('outbound','二线时段明细')] %}
+<div class="section-title">{{ title }}</div>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2">{{ data.headers[cat]["label"] }}</th>
+      {% for g in data.headers[cat]["groups"] %}
+      <th colspan="{{ g["values"] | length }}">{{ g["name"] }}</th>
+      {% endfor %}
+    </tr>
+    <tr>
+      {% for g in data.headers[cat]["groups"] %}
+      {% for v in g["values"] %}<th>{{ v }}</th>{% endfor %}
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in data.tables[cat] %}
+    <tr>{% for k, v in row.items() %}<td class="{{ v|rate_class(k) }}">{{ '' if v is none else v }}</td>{% endfor %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endfor %}
+
+<script>
+var INBOUND  = {{ data.inbound  | tojson }};
+var OUTBOUND = {{ data.outbound | tojson }};
+var LATEST_DATE = {{ latest_date | tojson }};
+
+/* ===== 图表配色（Chart.js v4） ===== */
+var BAR_PALETTE = {
+  '预测量':'#3b82f6', '转人工量':'#06b6d4', '转人工成功量':'#22c55e',
+  '转接量':'#6366f1', '工单量':'#14b8a6'
+};
+function _cssVar(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function themeColors(){
+  var v=_cssVar, tick=v('--tick'), grid=v('--grid');
+  return {
+    grid:grid, tick:tick, accent:v('--accent'),
+    legend:{ position:'bottom', labels:{ color:tick, boxWidth:12, font:{ size:11 } } },
+    line:{
+      solid:{ borderColor:v('--line-solid'), borderWidth:2, pointRadius:2, tension:0.3, fill:false, order:1 },
+      dash :{ borderColor:v('--line-dash'),  borderWidth:2, pointRadius:2, tension:0.3, fill:false, borderDash:[5,4], order:1 }
+    },
+    scales:{
+      x     :{ grid:{ color:grid }, ticks:{ color:tick, font:{ size:11 } } },
+      yLeft :{ position:'left',  grid:{ color:grid },       ticks:{ color:tick, font:{ size:11 } }, title:{ display:true, text:'量',   color:tick } },
+      yRight:{ position:'right', grid:{ display:false },    ticks:{ color:tick, font:{ size:11 } }, title:{ display:true, text:'人数', color:tick } }
+    }
+  };
+}
+function _axis(group){
+  var xs = group.hours || group.days || [];
+  var labels = xs.map(function(x){ return group.hours ? x+'点' : x+'日'; });
+  return { xs:xs, labels:labels };
+}
+function _vals(group, key, xs){
+  return xs.map(function(x){ var v = group[key][x]; return v === undefined ? null : v; });
+}
+/* 构造一个图：kind='in'(接听) | 'out'(外呼)。语义镜像原 charts.py */
+function buildChart(canvasId, name, group, kind){
+  var c = themeColors();
+  var a = _axis(group);
+  var datasets = [];
+  var hasLine = false;
+  if(kind === 'in'){
+    ['预测量','转人工量','转人工成功量'].forEach(function(f){
+      if(f in group) datasets.push({ type:'bar', label:f, yAxisID:'yLeft',
+        backgroundColor:BAR_PALETTE[f], borderRadius:4, data:_vals(group,f,a.xs), order:2 });
+    });
+    if('工单量' in group) datasets.push({ type:'bar', label:'工单量', yAxisID:'yLeft',
+      backgroundColor:BAR_PALETTE['工单量'], borderRadius:4, data:_vals(group,'工单量',a.xs), order:2 });
+    if('在线' in group){
+      hasLine = true;
+      datasets.push(Object.assign({ type:'line', label:'在线', yAxisID:'yRight', data:_vals(group,'在线',a.xs) }, c.line.solid));
+    } else {
+      if('签入' in group){ hasLine=true; datasets.push(Object.assign({ type:'line', label:'签入', yAxisID:'yRight', data:_vals(group,'签入',a.xs) }, c.line.solid)); }
+      if('空闲' in group){ hasLine=true; datasets.push(Object.assign({ type:'line', label:'空闲', yAxisID:'yRight', data:_vals(group,'空闲',a.xs) }, c.line.dash)); }
+    }
+  } else {
+    var stack = ('转接量' in group) ? 'total' : undefined;
+    ['转接量','工单量'].forEach(function(f){
+      if(f in group) datasets.push({ type:'bar', label:f, yAxisID:'yLeft',
+        backgroundColor:BAR_PALETTE[f], borderRadius:4, data:_vals(group,f,a.xs), stack:stack, order:2 });
+    });
+    if('签入' in group){ hasLine=true; datasets.push(Object.assign({ type:'line', label:'签入', yAxisID:'yRight', data:_vals(group,'签入',a.xs) }, c.line.solid)); }
+    if('空闲' in group){ hasLine=true; datasets.push(Object.assign({ type:'line', label:'空闲', yAxisID:'yRight', data:_vals(group,'空闲',a.xs) }, c.line.dash)); }
+  }
+  var scales = { x:c.scales.x, yLeft:c.scales.yLeft };
+  if(hasLine) scales.yRight = c.scales.yRight;
+  var el = document.getElementById(canvasId);
+  if(!el) return null;
+  return new Chart(el.getContext('2d'), {
+    type:'bar',
+    data:{ labels:a.labels, datasets:datasets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:c.legend, tooltip:{ mode:'index', intersect:false } },
+      scales:scales
+    }
+  });
+}
+
+var CHARTS = [];
+function renderAll(){
+  CHARTS.forEach(function(ch){ if(ch) ch.destroy(); });
+  CHARTS = [];
+  Object.keys(INBOUND).forEach(function(name){
+    CHARTS.push(buildChart('chart_in_' + name, name, INBOUND[name], 'in'));
+  });
+  Object.keys(OUTBOUND).forEach(function(name){
+    CHARTS.push(buildChart('chart_out_' + name, name, OUTBOUND[name], 'out'));
+  });
+}
+
+/* ===== 一键切亮/暗：翻转 data-theme，重建图表拾取新色，记 localStorage ===== */
+function applyTheme(t){
+  document.documentElement.dataset.theme = (t === 'light') ? 'light' : '';
+  var btn = document.getElementById('themeToggle');
+  if(btn) btn.textContent = (t === 'light') ? '☀ 浅色' : '🌙 深色';
+}
+function toggleTheme(){
+  var cur = (document.documentElement.dataset.theme === 'light') ? 'light' : 'dark';
+  var nxt = (cur === 'light') ? 'dark' : 'light';
+  applyTheme(nxt);
+  try{ localStorage.setItem('wfm-theme', nxt); }catch(e){}
+  renderAll();
+}
+document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+try{
+  applyTheme(localStorage.getItem('wfm-theme') || 'dark');
+}catch(e){ applyTheme('dark'); }
+
+/* ===== 视图切换时同步日期选择器类型（日<->月）并修正 value 格式 ===== */
+(function(){
+  var viewSel = document.querySelector('select[name="view"]');
+  var dateInp = document.querySelector('input[name="date"]');
+  if(!viewSel || !dateInp) return;
+  viewSel.addEventListener('change', function(){
+    var v = dateInp.value || '';
+    if(viewSel.value === 'month'){
+      dateInp.type = 'month';
+      if(v.length >= 10) dateInp.value = v.slice(0, 7);   // YYYY-MM-DD -> YYYY-MM
+    } else {
+      dateInp.type = 'date';
+      dateInp.value = LATEST_DATE;                         // 切到日视图 -> 最新有数据日
+    }
+  });
+})();
+
+renderAll();
+</script>
+</body>
+</html>
