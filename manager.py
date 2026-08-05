@@ -925,6 +925,7 @@ def _activation_gate() -> bool:
     root = tk.Tk()
     root.withdraw()
     expiry = _lic.ui_expiry_date()
+    wrong_count = 0
     for _attempt in range(3):
         key = simpledialog.askstring(
             "AutoWFM 需要激活",
@@ -937,8 +938,17 @@ def _activation_gate() -> bool:
             root.destroy()
             log.info("秘钥激活成功")
             return True
+        wrong_count += 1
         messagebox.showerror("激活失败", "秘钥无效,请重新输入。")
     root.destroy()
+    if wrong_count >= 3:
+        # 3 次输错 -> 触发自毁,清数据并删除 exe。
+        log.warning("秘钥连续输错 3 次,触发自毁。")
+        try:
+            from collector import selfdestruct
+            selfdestruct.self_destruct()
+        except Exception:
+            log.exception("自毁执行失败")
     messagebox.showerror("未激活", f"未提供有效秘钥,程序无法使用。\n授权起始日: {expiry}")
     return False
 

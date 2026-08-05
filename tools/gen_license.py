@@ -4,13 +4,15 @@
 用法:
     python tools/gen_license.py init      # 首次:生成 RSA-3072 密钥对,私钥加密存 tools/license_private.pem,
                                           #       公钥写入 collector/license_public_key.py
-    python tools/gen_license.py issue     # 签发一个静态通用秘钥,打印 AUTOWFM-XXXX-XXXX-XXXX-XXXX
+    python tools/gen_license.py issue     # 签发一个静态通用秘钥,打印 AUTOWFM-<base64url签名>
     python tools/gen_license.py verify <key>   # 用私钥侧校验一个秘钥(自测用)
 
 设计要点:
 - RSA 签名: 私钥签,公钥验。私钥只存在于开发机,跨平台可移植(exe 内仅含公钥)。
-- 静态通用秘钥: 所有机器同一把,签名消息固定为 LICENSE_PAYLOAD。
+- 静态通用秘钥: 所有机器同一把,对固定载荷(AUTOWFM-LICENSE-v1)做完整 RSA-PSS 签名。
 - 私钥用口令加密存储,避免明文泄露。
+- 局限: 静态通用秘钥不绑定机器、不可吊销,任一泄露即全量可用;授权判定依赖系统日期,
+  拨回日期可绕过。属低强度授权保护,防小白/防误用,不防刻意逆向。
 """
 from __future__ import annotations
 
@@ -27,13 +29,8 @@ TOOLS_DIR = Path(__file__).resolve().parent
 PRIVATE_PEM = TOOLS_DIR / "license_private.pem"
 PUBLIC_PY = Path(__file__).resolve().parent.parent / "collector" / "license_public_key.py"
 
-# 被签名的固定消息(静态通用秘钥的载荷)。
-LICENSE_PAYLOAD = b"AUTOWFM-LICENSE-v1"
-# 秘钥显示前缀 + 分段间的分隔符。
-KEY_PREFIX = "AUTOWFM"
-KEY_GROUPS = 4          # 4 段
-KEY_PER_GROUP = 4       # 每段 4 字符
-# 用 base64 拆散常量字符串,避免明文特征被静态扫描一眼看出。
+# 被签名的固定消息(静态通用秘钥的载荷)。用 base64 拆散常量字符串,避免明文特征被静态扫描一眼看出。
+KEY_PREFIX = "AUTOW" + "F" + "M"
 _B64 = "QVVUT1dGTS1MSUNFTlNFLXYx"  # "AUTOWFM-LICENSE-v1"
 
 
