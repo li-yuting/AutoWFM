@@ -78,11 +78,29 @@ def test_backfill_source():
     assert backfill.day_row_count("工单明细", "2026-07-16", d) == 0
     assert any("下载失败" in m for m in msgs), msgs
 
+def test_build_snapshots_cutoff():
+    import pandas as pd
+    df = pd.DataFrame({
+        "创建日期": ["2026-07-15 09:02:00", "2026-07-15 09:07:00", "2026-07-15 09:12:00",
+                  "2026-07-15 10:00:00", "2026-07-15 23:30:00"],
+        "接收组": ["转接一组", "转接一组", "转接二组", "转接一组", "转接一组"],
+    })
+    fcfg = {"group_column": "接收组", "groups": ["转接一组", "转接二组"]}
+    # cutoff=09:10 -> 只生成 09:00..09:10 刻度，无 23:59
+    rows, total = backfill.build_snapshots(df, "2026-07-15", fcfg, ["转接一组", "转接二组"],
+                                           "创建日期", "%Y-%m-%d %H:%M:%S", "09:00", "21:04",
+                                           cutoff="09:10")
+    assert total == {"转接一组": 4, "转接二组": 1}, total  # total 仍为全天
+    assert rows[-1]["时间"] == "2026-07-15 09:10", rows[-1]
+    assert rows[-1]["转接一组"] == 2, rows[-1]  # <09:10 = 09:02+09:07
+    assert all(not r["时间"].endswith("23:59") for r in rows)
+
 def main():
     test_iter_days()
     test_day_ops()
     test_build_snapshots_gongdan()
     test_build_snapshots_channel()
+    test_build_snapshots_cutoff()
     test_backfill_source()
     print("backfill OK")
 

@@ -19,7 +19,7 @@ import sys
 import threading
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
 from collector._utils import parse_hhmm, fmt_hhmm, load_cfg
 
@@ -912,7 +912,40 @@ class ManagerUI:
         self.root.destroy()
 
 
+def _activation_gate() -> bool:
+    """秘钥校验闸口:返回 True 放行,False 需退出。
+
+    系统日期 < 授权起始日(2026-10-01)直接放行;到期后必须输入有效秘钥。
+    校验失败则提示并返回 False,由 main() 退出,不启动任何功能。
+    """
+    from collector import license as _lic
+    if _lic.check_license():
+        return True
+    # 到期,需输入秘钥。
+    root = tk.Tk()
+    root.withdraw()
+    expiry = _lic.ui_expiry_date()
+    for _attempt in range(3):
+        key = simpledialog.askstring(
+            "AutoWFM 需要激活",
+            f"当前版本自 {expiry} 起需要激活秘钥。\n请输入秘钥后继续:",
+            parent=root,
+        )
+        if key is None:  # 用户取消
+            break
+        if _lic.is_activated(key):
+            root.destroy()
+            log.info("秘钥激活成功")
+            return True
+        messagebox.showerror("激活失败", "秘钥无效,请重新输入。")
+    root.destroy()
+    messagebox.showerror("未激活", f"未提供有效秘钥,程序无法使用。\n授权起始日: {expiry}")
+    return False
+
+
 def main() -> None:
+    if not _activation_gate():
+        return
     try:
         cfg = load_cfg(CONFIG_PATH)
     except Exception as exc:

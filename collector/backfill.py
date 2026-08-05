@@ -58,11 +58,13 @@ def clear_day(source, day, data_dir):
         c.close()
 
 
-def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end):
+def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end, cutoff=None):
     """5 分钟分桶 -> 业务窗口累计快照 + 23:59 全天总计。
-    返回 (rows, total)：rows=窗口刻度+23:59 的 dict 列表，total={组:全天全量}。
+    返回 (rows, total)：rows=窗口刻度(+可选 23:59) 的 dict 列表，total={组:全天全量}。
     全天总计用 filter 后全量(含时间列缺失的记录)，与实时 count_groups 口径一致；
-    累计快照仅含能分桶的记录(时间列缺失的不计入任何刻度)。"""
+    累计快照仅含能分桶的记录(时间列缺失的不计入任何刻度)。
+    cutoff="HH:MM"：仅生成时刻 ≤ cutoff 的刻度，且不追加 23:59 全天总计行
+    (用于补全「当天」时，只补过去时段、不写未来数据)。cutoff=None 保持原整天行为。"""
     import pandas as pd
     d = df
     if fcfg.get("channel_column"):
@@ -88,15 +90,21 @@ def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end):
     eh, em = (int(x) for x in win_end.split(":"))
     start_slot = (sh * 60 + sm) // 5
     end_slot = (eh * 60 + em) // 5
+    # cutoff：补全当天时，只输出 ≤ 当前时刻的刻度，不写未来时段
+    if cutoff is not None:
+        ch, cm = (int(x) for x in cutoff.split(":"))
+        cutoff_slot = (ch * 60 + cm) // 5
+        end_slot = min(end_slot, cutoff_slot)
     rows = []
     for slot in range(start_slot, end_slot + 1):
         hh, mm = divmod(slot * 5, 60)
         vals = {"时间": f"{day} {hh:02d}:{mm:02d}"}
         vals.update(cum[slot])
         rows.append(vals)
-    vals = {"时间": f"{day} 23:59"}
-    vals.update(total)
-    rows.append(vals)
+    if cutoff is None:
+        vals = {"时间": f"{day} 23:59"}
+        vals.update(total)
+        rows.append(vals)
     return rows, total
 
 
@@ -115,9 +123,10 @@ def download_day(mcfg, secrets, day, timeout=60):
     return _parse_excel(resp.content)
 
 
-def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=None):
+def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=None, now=None):
     """回填某 source 的若干天。返回 {"成功":int,"失败":int,"失败日期":[str]}。
-    overwrite=True：每天下载成功后先 clear_day 再写；下载失败则 continue 下一天。"""
+    overwrite=True：每天下载成功后先 clear_day 再写；下载失败则 continue 下一天。
+    now=None 时取当前时间；补全「当天」时只写 ≤ 当前时刻的刻度(不写未来时段/23:59)。"""
     mcfg = cfg["detail_modes"][source]
     secrets = cfg["secrets"]
     fcfg = mcfg["filter"]
@@ -127,6 +136,9 @@ def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=Non
     win_end = cfg["schedule"]["window_end"]
     if progress_cb is None:
         progress_cb = lambda s: None
+    if now is None:
+        now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
     ok = fail = 0
     fail_days = []
     for day in days:
@@ -140,7 +152,8 @@ def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=Non
             fail += 1
             fail_days.append(day)
             continue
-        rows, total = build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end)
+        rows, total = build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end,
+                                      cutoff=(now.strftime("%H:%M") if day == today_str else None))
         clear_day(source, day, data_dir)
         for vals in rows:
             storage.insert(source, vals, data_dir)
