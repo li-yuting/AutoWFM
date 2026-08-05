@@ -37,6 +37,7 @@ LOG_DIR = ROOT / "logs"
 COLLECTOR_LOG = LOG_DIR / "autowfm.log"
 DASHBOARD_LOG = LOG_DIR / "dashboard.log"
 MANAGER_LOG = LOG_DIR / "manager.log"
+SHIFT_LOG = LOG_DIR / "shift.log"
 
 MONITOR_INTERVAL_MS = 5000
 GRACE_SECONDS = 30          # 启动后存活不足此秒数即退出 -> 计为一次失败重启
@@ -129,10 +130,17 @@ def schedule_text(cfg: dict, now: dt.datetime) -> str:
 # ── 受管任务 ────────────────────────────────────────────────────────
 
 class ManagedTask:
-    def __init__(self, name: str, module: str, log_path: Path, capture_log: bool, env_extra: dict | None = None):
+    def __init__(self, name: str, module: str, log_path: Path, capture_log: bool,
+                 env_extra: dict | None = None, script: str | None = None,
+                 cwd: Path | None = None, match_key: str | None = None,
+                 auto_enabled: bool = True):
         self.name = name
         self.module = module                      # "collector.main" / "dashboard.app"
-        self.cmd = [PYTHON, "-m", module]
+        self.script = script                      # 若非 None,改为运行脚本(如排班 app.py)
+        self.cwd = cwd or ROOT                    # 运行工作目录(脚本所属项目目录)
+        self.match_key = match_key                # 若非 None,external-PID 按此串匹配(否则取脚本名/module)
+        self.auto_enabled = auto_enabled          # False -> 仅手动启停,不自动启停/自动重启
+        self.cmd = [PYTHON, "-m", module] if script is None else [PYTHON, script]
         self.log_path = log_path
         self.capture_log = capture_log            # True -> 把子进程 stdout 写入 log_path
         self.env_extra = env_extra or {}
@@ -162,12 +170,17 @@ class ManagedTask:
         """查找未由本 UI 启动、但命令行匹配的 python 进程(避免重复拉起,尤其看板端口占用)。"""
         if os.name != "nt":
             return None
-        module = self.module.replace('"', '`"')
-        # 匹配 python.exe 与 pythonw.exe:管理器经开机自启(pythonw.exe)运行时,
-        # 子进程也是 pythonw.exe,仅匹配 python.exe 会漏掉 -> 接管失败、重复拉起。
+        # 优先用显式 match_key,否则脚本模式取脚本文件名,模块模式取 module 字符串
+        if self.match_key:
+            match_key = self.match_key
+        elif self.script:
+            match_key = self.script.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        else:
+            match_key = self.module
+        match_key = match_key.replace('"', '`"')
         command = (
             "Get-CimInstance Win32_Process | "
-            f"Where-Object {{$_.CommandLine -like '*{module}*' -and ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe')}} | "
+            f"Where-Object {{$_.CommandLine -like '*{match_key}*' -and ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe')}} | "
             "Select-Object -First 1 -ExpandProperty ProcessId"
         )
         try:
@@ -229,7 +242,7 @@ class ManagedTask:
             else:
                 stdout = subprocess.DEVNULL
             self.process = subprocess.Popen(
-                self.cmd, cwd=str(ROOT),
+                self.cmd, cwd=str(self.cwd),
                 stdout=stdout, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                 creationflags=creationflags, env=self._env(),
             )
@@ -292,6 +305,10 @@ class ManagedTask:
             self.popup_shown = False
             log.info("%s: 跨天重置,日期=%s", self.name, today)
 
+        # 仅手动启停的任务:不做任何自动启停/自动重启,完全由手动控制
+        if not self.auto_enabled:
+            return events
+
         # 2. 自动停止（每天触发一次）
         if not in_window and not self.auto_stopped_today:
             if self.is_running() or self.external_pid:
@@ -353,6 +370,9 @@ TASK_DEFS = [
     dict(name="采集器", module="collector.main", log_path=COLLECTOR_LOG, capture_log=False),
     dict(name="看板", module="dashboard.app", log_path=DASHBOARD_LOG, capture_log=True,
          env_extra={"AUTOWFM_DEBUG": "0"}),
+    dict(name="排班", module="", log_path=SHIFT_LOG, capture_log=True,
+         script="shift_manager.py", cwd=ROOT, match_key="app.py",
+         env_extra={"AUTOWFM_MANAGED": "1"}, auto_enabled=False),
 ]
 
 

@@ -180,6 +180,33 @@ def test_tick_user_stopped_reset_on_new_day():
     print("tick_user_stopped_reset_on_new_day OK")
 
 
+def test_tick_manual_only_no_auto_start_stop():
+    """auto_enabled=False 的任务:不做自动启停、不做崩溃自动重启,完全手动控制。"""
+    task = ManagedTask(name="手动-only", module="", log_path=Path("nul"), capture_log=False,
+                       script="app.py", auto_enabled=False)
+    # 窗口内 tick 不应自动启动(默认关闭)
+    with patch("manager.subprocess.Popen") as popen:
+        events = task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
+        popen.assert_not_called()
+    assert not task.is_running()
+    assert len(events) == 0, "auto_enabled=False 不应产生自动启停事件"
+
+    # 手动启动后,即使窗口外 tick 也不应自动停止
+    proc = _running_proc()
+    with patch("manager.subprocess.Popen", return_value=proc):
+        task.start(automatic=False)
+        events = task.tick(False, dt.datetime(2026, 8, 1, 22, 0, tzinfo=SH))
+    assert task.is_running(), "auto_enabled=False 手动启动后不应被自动停止"
+    assert len(events) == 0
+
+    # 崩溃也不应自动重启
+    proc.poll.return_value = 1
+    events = task.tick(False, dt.datetime(2026, 8, 1, 22, 5, tzinfo=SH))
+    assert not task.is_running()
+    assert task.restart_failures == 0, "auto_enabled=False 崩溃不应触发自动重启"
+    print("tick_manual_only_no_auto_start_stop OK")
+
+
 def test_stop_automatic_parameter():
     task = _make_task()
     proc = _running_proc()
@@ -236,9 +263,9 @@ def test_ui_constructs():
         root.withdraw()
         ui = ManagerUI(root, _cfg())
         try:
-            assert len(ui._nav_buttons) == 4, f"4 个导航按钮, 实际 {len(ui._nav_buttons)}"
-            assert len(ui._nav_pages) == 4, f"4 个内容页, 实际 {len(ui._nav_pages)}"
-            assert len(ui._log_boxes) == 2, f"2 个日志框, 实际 {len(ui._log_boxes)}"
+            assert len(ui._nav_buttons) == 5, f"5 个导航按钮, 实际 {len(ui._nav_buttons)}"
+            assert len(ui._nav_pages) == 5, f"5 个内容页, 实际 {len(ui._nav_pages)}"
+            assert len(ui._log_boxes) == 3, f"3 个日志框, 实际 {len(ui._log_boxes)}"
         finally:
             root.destroy()
     print("ui_constructs OK")
@@ -278,6 +305,7 @@ def main():
     test_tick_no_crash_restart_outside_window()
     test_tick_user_stopped_reset_on_new_day()
     test_stop_automatic_parameter()
+    test_tick_manual_only_no_auto_start_stop()
     test_find_external_pid_matches_pythonw()
     test_tick_health_check_clears_failures()
     test_ui_constructs()
