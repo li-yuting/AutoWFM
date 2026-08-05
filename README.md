@@ -31,8 +31,6 @@ AutoWFM/
 ├── tests/              # 纯 assert,无 pytest,逐文件直接跑
 ├── data/               # 9 个 *.db + 预估流入量.csv(运行时生成)
 ├── logs/               # 采集日志(按天轮转,保留 30 天)
-├── docs/superpowers/   # 设计 spec 与 plan(时间快照)
-├── archive/            # 非生产文件:一次性探针脚本、scratch notebook
 ├── manager.py          # 桌面管理器(Tkinter+托盘):监管采集器/看板 + 进线量预测页 + 重启
 ├── config.yaml         # 采集配置(端点、调度窗口、7 subs、2 detail_modes、密钥)
 └── CLAUDE.md           # 给 Claude 的详细架构说明(契约、边界、已知行为)

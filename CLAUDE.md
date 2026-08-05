@@ -59,10 +59,8 @@ Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }
 
 - No build step. No git (not installed - no commits/branches).
 - Tests bootstrap `sys.path` to the project root themselves, so run them from anywhere via `python tests/<file>.py`.
-- `archive/spike/` holds throwaway probes (WS/IM inspection, CSV backfill) - not production code.
 - `writeforecast/` 是一个独立工具，将周度预测 Excel（`writeforecast/data/量级预估*.xlsx`）转为 `data/预估流入量.csv` 的 15 分钟粒度时段预估量。运行 `python writeforecast/writeforecast.py`，不依赖 AutoWFM 其他模块。`writeforecast/时段人力数架构准备_v2.py` 是另一个独立脚本（时段人力数准备），也不属于主系统。
 - 工单明细/会话记录 历史回填走 manager.py「数据补全」页（底层 `collector.backfill`，`overwrite=True` 覆盖、失败 continue）；无独立 CLI。
-- `docs/superpowers/` holds design specs + plans (e.g. `2026-07-27-capacity-dashboard-design.md`); `archive/read_data.ipynb` is a scratch notebook for eyeballing `data/`.
 
 ## Architecture
 
@@ -111,7 +109,7 @@ A read-only Flask + Chart.js viewer (pyecharts removed) (`dashboard/`, run via `
 - 12378: **no CSV**. Forecast = **7-days-ago same-hour 转人工量** from `12378.db`. Card (累计) 用 `forecast_12378` / `_forecast_12378_daily` (每小时/每日最新); chart (增量) 用 `forecast_12378_first`+`forecast_12378` 经 `_inc_d` (方案D).
 - Outside CSV range (2026-06-01…2026-08-15) or before 7 days of history, 预测量 is 0/None.
 
-**Group → source mapping** is many-to-one and spread across `build_day`/`build_month` (e.g. 常规二线 = 工单明细.回访组一组 + 会话记录.(转接一组+转接二组) + 常规.db seats). The authoritative table is §4.1 of `docs/superpowers/specs/2026-07-27-capacity-dashboard-design.md`; consult it before remapping a group.
+**Group → source mapping** is many-to-one and spread across `build_day`/`build_month` (e.g. 常规二线 = 工单明细.回访组一组 + 会话记录.(转接一组+转接二组) + 常规.db seats). Reference `build_day`/`build_month` in `dashboard/queries.py` before remapping a group.
 
 **Layout** (`templates/dashboard.html`; charts built client-side from `data.inbound`/`data.outbound` via `buildChart()`): Part 1 = per-group cards in a flex row (合计 card removed). Part 2 = 3 inbound charts in one flex row; Part 3 = 4 outbound charts in one flex row (each `.chart-cell` `flex:1 1 0`, Chart.js mounts into a 360px `.chart` canvas). Part 4 = two tables (接听/外呼) with a **two-row header** (`_table_header`: row 1 = group `colspan`, row 2 = value name, 小时/日 `rowspan=2`); rows are trimmed to **only collected hours** (`range(8,21)` filtered by which sources have data - uncollected future hours are omitted; an 8点 row appears when 12378 has 8:30+ data). **Theme**: dark-first CSS variables (`:root`) + `[data-theme="light"]` override (toggle button, persisted to localStorage); dimension colors 热线/在线/12378/二线 = blue/cyan/purple/amber (`--c-hotline/--c-online/--c-12378/--c-second`); bar palette 预测量/转人工量/转人工成功量/12378回访组/转接量/工单量 = #3b82f6/#06b6d4/#22c55e/#a855f7/#6366f1/#14b8a6; lines (签入 solid / 空闲 dashed / 在线 solid) on the right axis read `--line-solid`/`--line-dash`. Chart X-axis (`_hours_for`): 12378 weekday 8-20 / weekend 9-17; all others 9-20.
 
