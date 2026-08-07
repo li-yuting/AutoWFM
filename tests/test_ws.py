@@ -31,6 +31,14 @@ def main():
     im = ws._extract_im(IM)
     assert im == {"转人工量":3307,"转人工失败":1,"排队":0,"咨询":0,
                   "在线":2,"小休":1,"示忙":1,"话后":1,"就餐":1,"培训":1,"回访":0}, im
+    # _merge_im: IM「在线」数加到主 SEAT 的「签入」上；im_val/val 为 None 时不变
+    seat520 = ws._extract_seat("252")(SEAT)
+    merged = ws._merge_im(seat520, im)
+    assert merged["签入"] == 4, merged  # 2(SEAT loginCount) + 2(IM free 在线)
+    assert merged["通话"] == 1 and merged["空闲"] == 1  # 其他列不受影响
+    assert ws._merge_im(seat520, None)["签入"] == 2  # IM 无数据 -> 原值不变
+    assert ws._merge_im(None, im) is None  # 主源无数据 -> None
+    assert ws._merge_im({"通话":1}, im) == {"通话":1}  # 主 dict 无「签入」键 -> 原样返回
     print("ws OK")
 
 if __name__ == "__main__": main()

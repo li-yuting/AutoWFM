@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is the project's durable memory doc — authored for Claude-Code-style agent guidance and folded into every future Reasonix/Claude session.
 
 ## 快速命令参考
 
@@ -52,6 +52,8 @@ python tests/test_backfill.py
 python tests/test_manager.py
 python tests/test_dashboard_queries.py
 python tests/test_dashboard_app.py
+python tests/test_api.py
+python tests/test_repository.py
 
 # All tests in one shot (no pytest):
 Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }
@@ -127,7 +129,7 @@ A Tkinter GUI + system tray (`pystray`/`PIL`, optional - degrades to a plain win
 - **External-PID adoption**: before spawning, `_find_external_pid` (PowerShell `Get-CimInstance Win32_Process` matching the module name) detects a `python.exe` already running the same module and *adopts* it rather than spawning a duplicate - avoids double-binding the dashboard port. `stop()` on an adopted PID uses `taskkill /PID /T /F`.
 - **Logs**: collector keeps writing its own `logs/autowfm.log` (`capture_log=False`); the dashboard's stdout is captured to `logs/dashboard.log` (`capture_log=True`, since `dashboard.app` logs to stdout); the manager logs to `logs/manager.log`. The dashboard is launched with `AUTOWFM_DEBUG=0` so Flask's reloader is off (single process for clean crash-detect/stop).
 - **排班子项目（第三行任务「排班」）**: `ManagedTask` 支持 `pre_run`/`run_target`/`cwd`/`match_key`/`auto_enabled` 参数。排班任务用 `pre_run`（sys.path 注入 `shift/` + `webbrowser.open` 抑制）+ `run_target`（`shift/app.py`）内化原 `shift_manager.py` 的逻辑，子进程通过 `python -c "exec(sys.argv[1]); runpy.run_path(sys.argv[2], run_name='__main__')"` 启动。Flask 监听 `127.0.0.1:5000`；受管时（`AUTOWFM_MANAGED=1`）屏蔽 `webbrowser.open` 避免自动弹浏览器。`_find_external_pid` 按 `match_key`（排班设为 `app.py`）匹配，可接管外部直跑的排班进程。排班日志写 `logs/shift.log`。**排班任务 `auto_enabled=False`：仅手动启停，不做自动启停、不做崩溃自动重启，默认不运行**（采集器/API/看板仍自动启停）。改动均在 AutoWFM 侧，未触碰排班原始代码。
-- **UI 布局** (`_build_ui`): 四区结构,区间 `ttk.Separator` 分隔--标题栏(标题+每日计划)/常驻状态条/主区/底栏。**状态条**单 Frame 两行 `grid`(`●状态点 任务名 状态 PID 失败 来源 … [启动][停止][重启]`,两行对齐;状态点 `fg` 由 `_update_status` 按状态设色:运行绿 `#16803c`/停止灰 `#666666`/暂停红 `#aa2222`)。**主区** = 左侧 120px 导航栏(`tk.Button`+relief 选中态,`_show_page(idx)` 用 `tkraise` 切换右侧 `grid` 叠放内容页)替代原 `ttk.Notebook`;4 页:采集器日志/看板日志/排班日志/进线量预测/数据补全,默认采集器日志。**底栏**分 3 组(`[刷新日志]`｜`[开机自启][重启控制台]`｜日志路径右对齐)。按钮一律 `tk.Button`(开机自启用 `textvariable`,`ttk.Button` 不支持)。
+- **UI 布局** (`_build_ui`): 四区结构,区间 `ttk.Separator` 分隔--标题栏(标题+每日计划)/常驻状态条/主区/底栏。**状态条**单 Frame 两行 `grid`(`●状态点 任务名 状态 PID 失败 来源 … [启动][停止][重启]`,两行对齐;状态点 `fg` 由 `_update_status` 按状态设色:运行绿 `#16803c`/停止灰 `#666666`/暂停红 `#aa2222`)。**主区** = 左侧 120px 导航栏(`tk.Button`+relief 选中态,`_show_page(idx)` 用 `tkraise` 切换右侧 `grid` 叠放内容页)替代原 `ttk.Notebook`;5 页:采集器日志/看板日志/排班日志/进线量预测/数据补全,默认采集器日志。**底栏**分 3 组(`[刷新日志]`｜`[开机自启][重启控制台]`｜日志路径右对齐)。按钮一律 `tk.Button`(开机自启用 `textvariable`,`ttk.Button` 不支持)。
 - **进线量预测页**: 左侧导航「进线量预测」页 = `Spinbox`(默认 7,1-30)+「运行预测」按钮 + 文本摘要。点按钮在后台线程惰性 `from collector import forecast; forecast.run_forecast(days)`(不阻塞 UI,不在启动时加载 statsmodels),摘要(纯函数 `_forecast_summary`:各业务 N 天合计/日均/超界日期 + CSV 路径)显示在只读文本框,结果也写 `output/`。
 - **次日预测量差异对比**: 每天 **21:05** 自动触发 `check_next_day_diff`（管理器进程内，不依赖采集器存活）。对比 forecast 次日预测 vs `data/预估流入量.csv` 全天累计预估量，差异超 `forecast.diff_threshold`(10%) 则发企微 @17629050914。结果写入 `manager.log`。
 - **数据补全页**: 左侧导航「数据补全」页 = 开始/结束日期 Entry(YYYY-MM-DD，结束留空=单日) + 会话记录/工单明细 Checkbutton(默认都勾) + 「开始补全」按钮 + 进度 ScrolledText。点按钮在后台线程调 `collector.backfill.backfill_source(..., overwrite=True, progress_cb=...)`，逐日进度经 `root.after` 回主线程追加（不直接碰 Tk）。去重锁 `_backfill_running`。含今天时进度框提示并发（建议先停采集器）。汇总显示各源成功/失败数。
