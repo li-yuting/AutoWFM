@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
-"""承接情况看板 Flask 应用。"""
+"""承接情况看板 Flask 应用。
+
+数据来源:通过 dashboard.api_client 调 FastAPI 服务(:8081),不再直连 SQLite。
+API 不可用时降级为直连 queries(向后兼容,需 data/ 目录存在)。
+"""
 import datetime
 import os
+import logging
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
 from dashboard import queries
+from dashboard import api_client
 
 # 加载 .env(若存在),使直接 python -m dashboard.app 也能读到 AUTOWFM_DASH_TOKEN
 try:
@@ -14,6 +20,7 @@ except ImportError:
 
 app = Flask(__name__)
 DATA_DIR = "data"
+log = logging.getLogger("autowfm.dashboard")
 
 # 看板 Bearer Token 认证: 读 AUTOWFM_DASH_TOKEN(由 manager 通过环境变量注入,或本地 .env 提供)。
 # 留空 -> 不启用认证(本地开发); 设值 -> 除白名单外所有请求需带 Authorization: Bearer <token>。
@@ -68,17 +75,30 @@ def health():
 
 @app.route("/")
 def index():
-    latest = queries.latest_data_date(DATA_DIR)
+    # 优先调 FastAPI;不可用时降级直连 queries(向后兼容)
+    try:
+        latest = api_client.get_latest_date()
+    except api_client.ApiUnavailableError as e:
+        log.warning(f"API 不可用,降级直连 queries: {e}")
+        latest = queries.latest_data_date(DATA_DIR)
     if not request.args:
         return redirect(url_for("index", view="day", date=latest))
     view = request.args.get("view", "day")
     date = request.args.get("date")
     if view == "month":
         date = date or datetime.date.today().strftime("%Y-%m")
-        data = queries.build_month(date, DATA_DIR)
+        try:
+            data = api_client.get_month(date)
+        except api_client.ApiUnavailableError as e:
+            log.warning(f"API 不可用,降级直连 queries: {e}")
+            data = queries.build_month(date, DATA_DIR)
     else:
         date = date or latest
-        data = queries.build_day(date, DATA_DIR)
+        try:
+            data = api_client.get_day(date)
+        except api_client.ApiUnavailableError as e:
+            log.warning(f"API 不可用,降级直连 queries: {e}")
+            data = queries.build_day(date, DATA_DIR)
     return render_template("dashboard.html", view=view, date=date, data=data, latest_date=latest)
 
 if __name__ == "__main__":

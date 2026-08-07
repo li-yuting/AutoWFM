@@ -62,6 +62,7 @@ Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }
 - **看板认证(Phase 1)**: `dashboard/app.py` `before_request` 校验 `Authorization: Bearer <AUTOWFM_DASH_TOKEN>`;token 留空则不启用(本地开发兼容)。`/health` 端点免认证返回 `{"status":"ok"}`。`notify.take_screenshot` 截图时带 Authorization header(`dash_token` 从 cfg 注入)。
 - **结构化日志(Phase 1)**: `collector/main.py` 用 `JsonFormatter` 输出每行一个 JSON 对象 `{ts,level,logger,message,exc_info?}`;apscheduler 压噪逻辑不变。
 - **CI(Phase 1)**: `.github/workflows/ci.yml` 在 Ubuntu + Python 3.14 串行跑 `tests/test_*.py`(无 pytest);`smoke.py` 需 WS 网络不纳入 CI。
+- **存储抽象 + API 层(Phase 2)**: `collector/repository.py` 定义 `StorageRepository`/`ReadOnlyRepository` Protocol + SQLite 实现,`storage.py`/`queries.py` 委托 Repository(为将来换 PostgreSQL 隔离);`api/app.py` 独立 FastAPI 进程(:8081)暴露 REST 端点(`/api/latest-date`、`/api/day`、`/api/month`、`/health`),复用 `queries` 聚合逻辑;看板 `dashboard/app.py` 通过 `dashboard/api_client.py` 调 API,API 不可用时降级直连 `queries`。`config.yaml` `storage.backend: sqlite` 预留后端切换。manager.py 管理 4 个任务(采集器/API/看板/排班)。
 - Tests bootstrap `sys.path` to the project root themselves, so run them from anywhere via `python tests/<file>.py`.
 - `writeforecast/` 是一个独立工具，将周度预测 Excel（`writeforecast/data/量级预估*.xlsx`）转为 `data/预估流入量.csv` 的 15 分钟粒度时段预估量。运行 `python writeforecast/writeforecast.py`，不依赖 AutoWFM 其他模块。`writeforecast/时段人力数架构准备_v2.py` 是另一个独立脚本（时段人力数准备），也不属于主系统。
 - 工单明细/会话记录 历史回填走 manager.py「数据补全」页（底层 `collector.backfill`，`overwrite=True` 覆盖、失败 continue）；无独立 CLI。

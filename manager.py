@@ -36,6 +36,7 @@ CONFIG_PATH = ROOT / "config.yaml"
 LOG_DIR = ROOT / "logs"
 COLLECTOR_LOG = LOG_DIR / "autowfm.log"
 DASHBOARD_LOG = LOG_DIR / "dashboard.log"
+API_LOG = LOG_DIR / "api.log"
 MANAGER_LOG = LOG_DIR / "manager.log"
 SHIFT_LOG = LOG_DIR / "shift.log"
 
@@ -366,8 +367,11 @@ class ManagedTask:
 
 
 # 任务定义:看板用 AUTOWFM_DEBUG=0 关掉 reloader,单进程便于崩溃检测/停止
+# API 排在看板之前(看板依赖 API),均自动启停
 TASK_DEFS = [
     dict(name="采集器", module="collector.main", log_path=COLLECTOR_LOG, capture_log=False),
+    dict(name="API", module="api.app", log_path=API_LOG, capture_log=True,
+         env_extra={"AUTOWFM_DEBUG": "0"}),
     dict(name="看板", module="dashboard.app", log_path=DASHBOARD_LOG, capture_log=True,
          env_extra={"AUTOWFM_DEBUG": "0"}),
     dict(name="排班", module="", log_path=SHIFT_LOG, capture_log=True,

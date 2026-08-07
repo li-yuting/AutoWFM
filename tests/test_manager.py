@@ -263,9 +263,9 @@ def test_ui_constructs():
         root.withdraw()
         ui = ManagerUI(root, _cfg())
         try:
-            assert len(ui._nav_buttons) == 5, f"5 个导航按钮, 实际 {len(ui._nav_buttons)}"
-            assert len(ui._nav_pages) == 5, f"5 个内容页, 实际 {len(ui._nav_pages)}"
-            assert len(ui._log_boxes) == 3, f"3 个日志框, 实际 {len(ui._log_boxes)}"
+            assert len(ui._nav_buttons) == 6, f"6 个导航按钮, 实际 {len(ui._nav_buttons)}"
+            assert len(ui._nav_pages) == 6, f"6 个内容页, 实际 {len(ui._nav_pages)}"
+            assert len(ui._log_boxes) == 4, f"4 个日志框, 实际 {len(ui._log_boxes)}"
         finally:
             root.destroy()
     print("ui_constructs OK")

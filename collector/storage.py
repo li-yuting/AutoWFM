@@ -1,44 +1,20 @@
-"""9 个独立 SQLite,按源名分库,每库一张表 t。"""
-import sqlite3
-from pathlib import Path
+"""9 个独立 SQLite,按源名分库,每库一张表 t。
 
-SCHEMAS = {
-    "热线":   ["时间","转人工量","接通量","排队量","累计呼入量","外呼量","外呼接通量"],
-    "12378":  ["时间","转人工量","接通量","排队量","累计呼入量"],
-    "热线明细": ["时间","签入","通话","空闲","离席","话后","振铃","置忙"],
-    "常规":   ["时间","签入","通话","空闲","离席","话后","振铃","置忙"],
-    "贷后":   ["时间","签入","通话","空闲","离席","话后","振铃","置忙"],
-    "12378明细": ["时间","签入","通话","空闲","离席","话后","振铃","置忙"],
-    "在线":   ["时间","转人工量","转人工失败","排队","咨询","在线","小休","示忙","话后","就餐","培训","回访"],
-    "会话记录": ["时间","转接一组","转接二组","贷后转接组","回访组一组","贷后回访组"],
-    "工单明细": ["时间","二线客诉处理组","常规工单处理组","回访组一组","贷后回访组","12378回访组","转接一组","转接二组","贷后转接组"],
-}
+薄封装层:委托给 collector.repository.SQLiteRepository。
+保留 insert/ensure_index/SCHEMAS 函数签名不变(向后兼容 scheduler/backfill/main/tests 调用点)。
+SCHEMAS 从 repository.py 导入(单一事实源)。
+"""
+from collector.repository import SQLiteRepository, SCHEMAS
+
+# 模块级默认实例(向后兼容无 data_dir 参数的场景)
+_repo = SQLiteRepository("data")
+
 
 def insert(source, values, data_dir):
-    cols = SCHEMAS[source]
-    path = Path(data_dir) / f"{source}.db"
-    # ponytail: 每次开/关连接 - 9 路各写各的库,无跨线程共享,简单且无锁竞争
-    conn = sqlite3.connect(str(path))
-    try:
-        col_def = ",".join(f'"{c}" {"TEXT" if c=="时间" else "INTEGER"}' for c in cols)
-        conn.execute(f'CREATE TABLE IF NOT EXISTS t ({col_def})')
-        quoted = ",".join('"' + c + '"' for c in cols)
-        ph = ",".join("?" * len(cols))
-        conn.execute(f'INSERT INTO t ({quoted}) VALUES ({ph})', [values[c] for c in cols])
-        conn.commit()
-    finally:
-        conn.close()
+    """插入一行到指定源的 t 表。"""
+    _repo.insert(source, values, data_dir)
+
 
 def ensure_index(source, data_dir):
-    """为某源建「时间」列索引,加速看板按日/月前缀查询。启动时调用一次,幂等。
-    直接调 insert 的测试/回填不建索引(功能仍正常),仅查询性能优化。"""
-    cols = SCHEMAS[source]
-    path = Path(data_dir) / f"{source}.db"
-    conn = sqlite3.connect(str(path))
-    try:
-        col_def = ",".join(f'"{c}" {"TEXT" if c=="时间" else "INTEGER"}' for c in cols)
-        conn.execute(f'CREATE TABLE IF NOT EXISTS t ({col_def})')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_t_time ON t("时间")')
-        conn.commit()
-    finally:
-        conn.close()
+    """为某源建「时间」列索引,幂等。"""
+    _repo.ensure_index(source, data_dir)

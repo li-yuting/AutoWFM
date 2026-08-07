@@ -1,33 +1,31 @@
 # -*- coding: utf-8 -*-
-"""看板数据层：只读 data/*.db + 预估流入量.csv，做小时/按日聚合。"""
+"""看板数据层：只读 data/*.db + 预估流入量.csv，做小时/按日聚合。
+
+底层 SQLite 访问已委托给 collector.repository.SQLiteReadOnlyRepository(Repository 模式)。
+聚合逻辑(build_day/build_month/方案D 增量等)不依赖存储实现,只调本模块的 _rows_in/_cols 等。
+"""
 import csv
 import sqlite3
 from datetime import date as _date
 from pathlib import Path
 
+from collector.repository import SQLiteReadOnlyRepository
+
+def _repo_for(data_dir):
+    """为指定 data_dir 创建只读 Repository(每次调用新建,无状态)。"""
+    return SQLiteReadOnlyRepository(data_dir)
+
 def _connect(data_dir, source):
+    """向后兼容:直接返回 sqlite3 连接(仅 latest_data_date 等少数处用)。"""
     return sqlite3.connect(str(Path(data_dir) / f"{source}.db"))
 
 def _cols(con):
     return [r[1] for r in con.execute("PRAGMA table_info(t)").fetchall()]
 
 def _rows_in(data_dir, source, prefix):
-    """某天(prefix=YYYY-MM-DD)或某月(prefix=YYYY-MM)该源所有行(升序)+列名。无表/无数据返回 ([], [])。"""
-    path = Path(data_dir) / f"{source}.db"
-    if not path.exists():
-        return [], []
-    con = _connect(data_dir, source)
-    try:
-        cols = _cols(con)
-        if not cols:
-            return [], []
-        rows = con.execute(
-            f'SELECT {",".join(chr(34)+c+chr(34) for c in cols)} FROM t '
-            f'WHERE "时间" LIKE ? ORDER BY "时间"', (f"{prefix}%",)
-        ).fetchall()
-    finally:
-        con.close()
-    return rows, cols
+    """某天(prefix=YYYY-MM-DD)或某月(prefix=YYYY-MM)该源所有行(升序)+列名。无表/无数据返回 ([], [])。
+    委托给 SQLiteReadOnlyRepository.rows_in。"""
+    return _repo_for(data_dir).rows_in(source, prefix)
 
 
 def _rows_in_day(data_dir, source, date_str):
@@ -72,21 +70,8 @@ def hourly_avg(data_dir, source, date_str):
     return out
 
 def _rows_in_month(data_dir, source, ym):
-    path = Path(data_dir) / f"{source}.db"
-    if not path.exists():
-        return [], []
-    con = _connect(data_dir, source)
-    try:
-        cols = _cols(con)
-        if not cols:
-            return [], cols
-        rows = con.execute(
-            f'SELECT {",".join(chr(34)+c+chr(34) for c in cols)} FROM t '
-            f'WHERE "时间" LIKE ? ORDER BY "时间"', (f"{ym}%",)
-        ).fetchall()
-    finally:
-        con.close()
-    return rows, cols
+    """委托给 SQLiteReadOnlyRepository.rows_in(与 _rows_in 同实现,prefix=YYYY-MM)。"""
+    return _repo_for(data_dir).rows_in(source, ym)
 
 def daily_latest(data_dir, source, ym):
     rows, cols = _rows_in_month(data_dir, source, ym)
@@ -111,23 +96,10 @@ def daily_avg(data_dir, source, ym):
     return out
 
 def latest_data_date(data_dir="data"):
-    """热线/在线 db 中最新的日期(YYYY-MM-DD)。日视图默认日期用它：
+    """热线/在线 db 中最新的日期(YYYY-MM-DD)。委托给 SQLiteReadOnlyRepository.latest_date。
     这两组窗口 9:00 起，故当天 9 点前取到的是昨天(最近有数据日)，9 点后取今天。
     任一库无数据则回落到今天。"""
-    best = ""
-    for src in ("热线", "在线"):
-        if not (Path(data_dir) / f"{src}.db").exists():
-            continue
-        con = _connect(data_dir, src)
-        try:
-            if "时间" not in _cols(con):
-                continue
-            row = con.execute('SELECT MAX(substr("时间",1,10)) FROM t').fetchone()
-            if row and row[0] and row[0] > best:
-                best = row[0]
-        finally:
-            con.close()
-    return best or _date.today().strftime("%Y-%m-%d")
+    return _repo_for(data_dir).latest_date()
 
 def _forecast_rows(data_dir, line, date_str):
     path = Path(data_dir) / "预估流入量.csv"
