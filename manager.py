@@ -134,14 +134,24 @@ class ManagedTask:
     def __init__(self, name: str, module: str, log_path: Path, capture_log: bool,
                  env_extra: dict | None = None, script: str | None = None,
                  cwd: Path | None = None, match_key: str | None = None,
-                 auto_enabled: bool = True):
+                 auto_enabled: bool = True,
+                 pre_run: str | None = None, run_target: str | None = None):
         self.name = name
         self.module = module                      # "collector.main" / "dashboard.app"
         self.script = script                      # 若非 None,改为运行脚本(如排班 app.py)
         self.cwd = cwd or ROOT                    # 运行工作目录(脚本所属项目目录)
         self.match_key = match_key                # 若非 None,external-PID 按此串匹配(否则取脚本名/module)
         self.auto_enabled = auto_enabled          # False -> 仅手动启停,不自动启停/自动重启
-        self.cmd = [PYTHON, "-m", module] if script is None else [PYTHON, script]
+        # pre_run + run_target: 子进程先 exec(pre_run)(如 sys.path 注入/webbrowser 抑制),
+        # 再 runpy.run_path(run_target, run_name="__main__")。替代独立包装脚本(如原 shift_manager.py)
+        if pre_run and run_target:
+            launcher = (
+                "import runpy, sys; exec(sys.argv[1]); "
+                "runpy.run_path(sys.argv[2], run_name='__main__')"
+            )
+            self.cmd = [PYTHON, "-c", launcher, pre_run, run_target]
+        else:
+            self.cmd = [PYTHON, "-m", module] if script is None else [PYTHON, script]
         self.log_path = log_path
         self.capture_log = capture_log            # True -> 把子进程 stdout 写入 log_path
         self.env_extra = env_extra or {}
@@ -368,6 +378,13 @@ class ManagedTask:
 
 # 任务定义:看板用 AUTOWFM_DEBUG=0 关掉 reloader,单进程便于崩溃检测/停止
 # API 排在看板之前(看板依赖 API),均自动启停
+# 排班任务用 pre_run+run_target 内化原 shift_manager.py 的逻辑(sys.path 注入 + webbrowser 抑制)
+_SHIFT_PRE_RUN = (
+    f"import sys; sys.path.insert(0, r'{ROOT / 'shift'}');\n"
+    "import os, webbrowser\n"
+    "if os.environ.get('AUTOWFM_MANAGED') == '1':\n"
+    "    webbrowser.open = lambda url, new=0, autoraise=True: True\n"
+)
 TASK_DEFS = [
     dict(name="采集器", module="collector.main", log_path=COLLECTOR_LOG, capture_log=False),
     dict(name="API", module="api.app", log_path=API_LOG, capture_log=True,
@@ -375,8 +392,9 @@ TASK_DEFS = [
     dict(name="看板", module="dashboard.app", log_path=DASHBOARD_LOG, capture_log=True,
          env_extra={"AUTOWFM_DEBUG": "0"}),
     dict(name="排班", module="", log_path=SHIFT_LOG, capture_log=True,
-         script="shift_manager.py", cwd=ROOT, match_key="app.py",
-         env_extra={"AUTOWFM_MANAGED": "1"}, auto_enabled=False),
+         cwd=ROOT, match_key="app.py",
+         env_extra={"AUTOWFM_MANAGED": "1"}, auto_enabled=False,
+         pre_run=_SHIFT_PRE_RUN, run_target=str(ROOT / "shift" / "app.py")),
 ]
 
 
