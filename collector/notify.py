@@ -176,8 +176,9 @@ def _send_text(key, mobiles, msg):
                           "text": {"content": msg, "mentioned_mobile_list": mobiles}})
 
 
-def take_screenshot(url):
-    """Playwright 截图 -> data/screenshot.png;失败返回 None。"""
+def take_screenshot(url, dash_token=None):
+    """Playwright 截图 -> data/screenshot.png;失败返回 None。
+    dash_token 非空时带 Authorization: Bearer header(看板启用认证后必需)。"""
     try:
         from playwright.sync_api import sync_playwright
         Path("data").mkdir(exist_ok=True)
@@ -186,6 +187,8 @@ def take_screenshot(url):
             b = p.chromium.launch(headless=True)
             try:
                 pg = b.new_page(viewport={"width": 1920, "height": 1080})
+                if dash_token:
+                    pg.set_extra_http_headers({"Authorization": f"Bearer {dash_token}"})
                 pg.goto(url, wait_until="networkidle", timeout=30000)
                 pg.wait_for_timeout(4000)   # 等 Chart.js 渲染(本看板无 updateTime 标记)
                 pg.screenshot(path=path, full_page=True)
@@ -252,7 +255,8 @@ def send_report(cfg, now=None):
         msg2 = build_secondline_msg(data_dir, now_str, date_str)
         if msg2:
             _send_md(msg2, wh["secondary_key"])
-        ss = take_screenshot(cfg["notify"]["screenshot_url"])
+        ss = take_screenshot(cfg["notify"]["screenshot_url"],
+                             cfg.get("notify", {}).get("dash_token") or None)
         if ss:
             _send_img(ss, wh["main_key"])
             _send_img(ss, wh["secondary_key"])

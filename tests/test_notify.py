@@ -214,13 +214,14 @@ def test_build_secondline_msg_empty():
     print("build_secondline_msg_empty OK")
 
 def test_config_notify_block():
-    import yaml
+    # 用 load_cfg() 而非直接 yaml.safe_load,以验证 .env 密钥注入链路
+    from collector._utils import load_cfg
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "config.yaml"), encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_cfg(os.path.join(root, "config.yaml"))
     n = cfg["notify"]
-    assert n["webhook"]["main_key"]
-    assert n["webhook"]["secondary_key"]
+    # webhook key 由 .env 注入;本地有 .env 时非空,CI 无 .env 时可为空(只验结构)
+    assert "main_key" in n["webhook"]
+    assert "secondary_key" in n["webhook"]
     assert n["alert"]["hotline_queue"] == 10
     assert n["alert"]["online_queue"] == 20
     assert n["alert"]["queue_12378"] == 1

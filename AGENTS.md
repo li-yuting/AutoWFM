@@ -57,7 +57,11 @@ python tests/test_dashboard_app.py
 Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }
 ```
 
-- No build step. No git (not installed - no commits/branches).
+- No build step. Git is initialized (`.git/`); `config.yaml`、`*密钥.yaml`、`.env`、`data/*.db`、`logs/`、`output/`、`.venv/` 均被 `.gitignore` 忽略。
+- **密钥管理(Phase 1)**: token/tenementId/webhook key/dash_token 明文已从 `config.yaml` 移除(置空),改由 `.env` 文件(被 git 忽略)经 `python-dotenv` 注入。`collector/_utils.py load_cfg()` 调 `load_dotenv()` 后用 `AUTOWFM_*` 环境变量覆盖 cfg 的空占位。`.env.example` 为入库模板。
+- **看板认证(Phase 1)**: `dashboard/app.py` `before_request` 校验 `Authorization: Bearer <AUTOWFM_DASH_TOKEN>`;token 留空则不启用(本地开发兼容)。`/health` 端点免认证返回 `{"status":"ok"}`。`notify.take_screenshot` 截图时带 Authorization header(`dash_token` 从 cfg 注入)。
+- **结构化日志(Phase 1)**: `collector/main.py` 用 `JsonFormatter` 输出每行一个 JSON 对象 `{ts,level,logger,message,exc_info?}`;apscheduler 压噪逻辑不变。
+- **CI(Phase 1)**: `.github/workflows/ci.yml` 在 Ubuntu + Python 3.14 串行跑 `tests/test_*.py`(无 pytest);`smoke.py` 需 WS 网络不纳入 CI。
 - Tests bootstrap `sys.path` to the project root themselves, so run them from anywhere via `python tests/<file>.py`.
 - `writeforecast/` 是一个独立工具，将周度预测 Excel（`writeforecast/data/量级预估*.xlsx`）转为 `data/预估流入量.csv` 的 15 分钟粒度时段预估量。运行 `python writeforecast/writeforecast.py`，不依赖 AutoWFM 其他模块。`writeforecast/时段人力数架构准备_v2.py` 是另一个独立脚本（时段人力数准备），也不属于主系统。
 - 工单明细/会话记录 历史回填走 manager.py「数据补全」页（底层 `collector.backfill`，`overwrite=True` 覆盖、失败 continue）；无独立 CLI。

@@ -10,3 +10,4 @@ openpyxl>=3.1
 playwright>=1.40
 pystray>=0.19
 Pillow>=10.0
+python-dotenv>=1.0
