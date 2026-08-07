@@ -41,37 +41,40 @@ def _extract_seat(skill):
             return None
     return f
 
-def _extract_im(obj):
-    try:
-        d = obj["data"]; ov = d.get("overview"); seats = d.get("seats")
-        if not ov or not seats:
+def _extract_im(name=""):
+    """IM_MONITOR 提取器。name 透入日志前缀(在线/常规/贷后)，区分来源。"""
+    def f(obj):
+        try:
+            d = obj["data"]; ov = d.get("overview"); seats = d.get("seats")
+            if not ov or not seats:
+                return None
+            out = {"在线":0,"小休":0,"示忙":0,"话后":0,"就餐":0,"培训":0,"回访":0}
+            for s in seats:
+                st = s.get("seatStatus")
+                if not st or st == "offline":
+                    continue
+                if st == "free":
+                    out["在线"] += 1
+                elif st == "notReady":
+                    out["示忙"] += 1
+                elif st == "rest":
+                    zh = REASON_MAP.get(s.get("seatRestReason") or "")
+                    if zh:
+                        out[zh] += 1
+                    else:
+                        out["小休"] += 1
+                        if s.get("seatRestReason"):
+                            log.warning(f"[{name or '在线'}] 未映射 seatRestReason: {s.get('seatRestReason')!r}")
+            return {"转人工量": ov["todaySessionTotalCnt"], "转人工失败": ov["todayQueueFailCnt"],
+                    "排队": ov["queueingCnt"], "咨询": ov["consultingCnt"], **out}
+        except Exception:
             return None
-        out = {"在线":0,"小休":0,"示忙":0,"话后":0,"就餐":0,"培训":0,"回访":0}
-        for s in seats:
-            st = s.get("seatStatus")
-            if not st or st == "offline":
-                continue
-            if st == "free":
-                out["在线"] += 1
-            elif st == "notReady":
-                out["示忙"] += 1
-            elif st == "rest":
-                zh = REASON_MAP.get(s.get("seatRestReason") or "")
-                if zh:
-                    out[zh] += 1
-                else:
-                    out["小休"] += 1
-                    if s.get("seatRestReason"):
-                        log.warning(f"[在线] 未映射 seatRestReason: {s.get('seatRestReason')!r}")
-        return {"转人工量": ov["todaySessionTotalCnt"], "转人工失败": ov["todayQueueFailCnt"],
-                "排队": ov["queueingCnt"], "咨询": ov["consultingCnt"], **out}
-    except Exception:
-        return None
+    return f
 
 def _make_extractor(screen, skill, name=""):
     if screen == "STATICS":    return lambda obj: _extract_statics(obj, name != "12378")
     if screen == "SEAT":       return _extract_seat(skill)
-    if screen == "IM_MONITOR": return _extract_im
+    if screen == "IM_MONITOR": return _extract_im(name)
     return lambda obj: None
 
 def _collect_screen(sub, cfg):

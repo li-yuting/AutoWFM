@@ -28,9 +28,11 @@ def main():
     seat = ws._extract_seat("252")(SEAT)
     assert seat == {"签入":2,"通话":1,"空闲":1,"离席":0,"话后":0,"振铃":0,"置忙":0}, seat
     assert ws._extract_seat("520")(SEAT) is None  # 跨 skill 过滤
-    im = ws._extract_im(IM)
+    im = ws._extract_im("在线")(IM)
     assert im == {"转人工量":3307,"转人工失败":1,"排队":0,"咨询":0,
                   "在线":2,"小休":1,"示忙":1,"话后":1,"就餐":1,"培训":1,"回访":0}, im
+    # 工厂化: 不同 name(在线/常规/贷后) 提取值一致, 仅日志前缀随 name 变
+    assert ws._extract_im("常规")(IM) == im
     # _merge_im: IM「在线」数加到主 SEAT 的「签入」上；im_val/val 为 None 时不变
     seat520 = ws._extract_seat("252")(SEAT)
     merged = ws._merge_im(seat520, im)
