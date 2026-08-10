@@ -8,7 +8,8 @@ from websocket import WebSocketTimeoutException
 
 log = logging.getLogger("autowfm")
 # seatStatus 仅 free/rest/notReady/offline;rest 的子状态在 seatRestReason
-REASON_MAP = {"meal": "就餐", "training": "培训", "arrange": "话后"}
+REASON_MAP = {"meal": "就餐", "training": "培训", "arrange": "话后",
+              "restroom": "小休", "rest": "小休"}
 # ponytail: 回访 等 reason 待业务时段日志补全
 
 def _extract_statics(obj, keep_hc=True):
@@ -49,6 +50,7 @@ def _extract_im(name=""):
             if not ov or not seats:
                 return None
             out = {"在线":0,"小休":0,"示忙":0,"话后":0,"就餐":0,"培训":0,"回访":0}
+            warned_reasons = set()  # 同一帧内同一 reason 只记录一次，避免刷屏
             for s in seats:
                 st = s.get("seatStatus")
                 if not st or st == "offline":
@@ -58,13 +60,15 @@ def _extract_im(name=""):
                 elif st == "notReady":
                     out["示忙"] += 1
                 elif st == "rest":
-                    zh = REASON_MAP.get(s.get("seatRestReason") or "")
+                    reason = s.get("seatRestReason") or ""
+                    zh = REASON_MAP.get(reason)
                     if zh:
                         out[zh] += 1
                     else:
                         out["小休"] += 1
-                        if s.get("seatRestReason"):
-                            log.warning(f"[{name or '在线'}] 未映射 seatRestReason: {s.get('seatRestReason')!r}")
+                        if reason and reason not in warned_reasons:
+                            warned_reasons.add(reason)
+                            log.warning(f"[{name or '在线'}] 未映射 seatRestReason: {reason!r}")
             return {"转人工量": ov["todaySessionTotalCnt"], "转人工失败": ov["todayQueueFailCnt"],
                     "排队": ov["queueingCnt"], "咨询": ov["consultingCnt"], **out}
         except Exception:

@@ -17,6 +17,8 @@ IM = {"cmd":2,"screen":"IM_MONITOR","data":{
     "seats":[{"seatStatus":"free"},{"seatStatus":"rest","seatRestReason":"meal"},
              {"seatStatus":"rest","seatRestReason":"training"},
              {"seatStatus":"rest","seatRestReason":"arrange"},
+             {"seatStatus":"rest","seatRestReason":"restroom"},
+             {"seatStatus":"rest","seatRestReason":"rest"},
              {"seatStatus":"rest"},{"seatStatus":"offline"},
              {"seatStatus":"notReady"},{"seatStatus":"free"}]}}
 
@@ -30,7 +32,7 @@ def main():
     assert ws._extract_seat("520")(SEAT) is None  # 跨 skill 过滤
     im = ws._extract_im("在线")(IM)
     assert im == {"转人工量":3307,"转人工失败":1,"排队":0,"咨询":0,
-                  "在线":2,"小休":1,"示忙":1,"话后":1,"就餐":1,"培训":1,"回访":0}, im
+                  "在线":2,"小休":3,"示忙":1,"话后":1,"就餐":1,"培训":1,"回访":0}, im
     # 工厂化: 不同 name(在线/常规/贷后) 提取值一致, 仅日志前缀随 name 变
     assert ws._extract_im("常规")(IM) == im
     # _merge_im: IM「在线」数加到主 SEAT 的「签入」上；im_val/val 为 None 时不变

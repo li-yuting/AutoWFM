@@ -138,7 +138,7 @@ A Tkinter GUI + system tray (`pystray`/`PIL`, optional - degrades to a plain win
 
 ## Known behaviors (not bugs)
 
-- **IM seat status**: `seatStatus` is only `free`/`rest`/`notReady`/`offline`. The 话后/就餐/培训/回访 buckets come from `seatRestReason` under `rest`, mapped via `REASON_MAP` in `collector/ws.py` (currently `{"meal":"就餐","training":"培训","arrange":"话后"}`). Unmapped reasons default to 小休 and are logged - extend `REASON_MAP` when a new reason appears in logs.
+- **IM seat status**: `seatStatus` is only `free`/`rest`/`notReady`/`offline`. The 话后/就餐/培训/回访 buckets come from `seatRestReason` under `rest`, mapped via `REASON_MAP` in `collector/ws.py` (currently `{"meal":"就餐","training":"培训","arrange":"话后","restroom":"小休","rest":"小休"}`). Unmapped reasons default to 小休 and are logged - extend `REASON_MAP` when a new reason appears in logs.
 - **外呼量/外呼接通量 are global** (`hcAnalysisData`, not per-numberType): stored in 热线 only - 12378 dropped these two on 2026-07-24 (redundant). `_extract_statics(keep_hc=False)` for `name=="12378"`, set in `_make_extractor(screen, skill, name)`.
 - WS `:7000` connection sometimes pushes other `skillCode` SEAT frames; `_extract_seat` filters by `afterOverTimeStatics[0].agentSplit == skill`.
 - The two jobs can take different intervals (e.g. WS 1-min, requests 5-min) by giving them separate triggers - relevant if cadence changes, since requests re-downloads the full day's Excel each cycle.

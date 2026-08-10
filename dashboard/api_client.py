@@ -11,8 +11,10 @@ import requests
 
 log = logging.getLogger("autowfm.dashboard")
 
-# API 基址:默认 http://localhost:8081,可由环境变量覆盖
-API_BASE_URL = os.environ.get("AUTOWFM_API_URL", "http://localhost:8081").rstrip("/")
+# API 基址:默认 http://127.0.0.1:8081,可由环境变量覆盖
+# 用 127.0.0.1 而非 localhost: Windows 上 localhost 优先解析 IPv6(::1),但服务
+# 监听 IPv4(0.0.0.0),IPv6 连接失败后回退 IPv4 每次延迟约 2 秒。
+API_BASE_URL = os.environ.get("AUTOWFM_API_URL", "http://127.0.0.1:8081").rstrip("/")
 _TIMEOUT = 8  # 秒
 
 

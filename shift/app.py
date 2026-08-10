@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import uuid
+from collections import defaultdict
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
@@ -35,6 +36,51 @@ def _cleanup_old_outputs() -> None:
                 f.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+# WARN 类型名映射（按 check_id）；未映射的以 check_id 兜底
+_WARN_LABELS = {
+    "03": "需求差异",
+    "04": "连续上班超限",
+    "05": "连续休息超限",
+    "08": "高强连续超限",
+    "10": "均衡差异",
+    "13": "未知班次",
+    "14": "休息间隔过短",
+}
+
+
+def _build_reminders(warnings) -> dict | None:
+    """根据验证警告生成简化提醒。班表 sheet 无空白（check_id 01）则返回 None。"""
+    if not any(w.check_id == "01" for w in warnings):
+        return None
+    errors = []
+    warn_counts: dict[str, int] = defaultdict(int)
+    info_count = 0
+    for w in warnings:
+        date_str = ""
+        if hasattr(w.date, "strftime"):
+            date_str = w.date.strftime("%Y-%m-%d")
+        if w.severity == "ERROR":
+            errors.append({
+                "check_id": w.check_id,
+                "employee": w.employee,
+                "date": date_str,
+                "message": w.message,
+            })
+        elif w.severity == "WARN":
+            warn_counts[w.check_id] += 1
+        elif w.severity == "INFO" and w.check_id != "12":
+            info_count += 1
+    warn_groups = [
+        {"check_id": cid, "label": _WARN_LABELS.get(cid, cid), "count": n}
+        for cid, n in sorted(warn_counts.items())
+    ]
+    return {
+        "errors": errors,
+        "warn_groups": warn_groups,
+        "info_count": info_count,
+    }
 
 
 @app.route("/")
@@ -91,18 +137,7 @@ def run():
     warns = [w for w in schedule.warnings if w.severity == "WARN"]
     infos = [w for w in schedule.warnings if w.severity == "INFO"]
 
-    warnings_json = []
-    for w in schedule.warnings:
-        date_str = ""
-        if hasattr(w.date, "strftime"):
-            date_str = w.date.strftime("%Y-%m-%d")
-        warnings_json.append({
-            "check_id": w.check_id,
-            "severity": w.severity,
-            "employee": w.employee,
-            "date": date_str,
-            "message": w.message,
-        })
+    reminders = _build_reminders(schedule.warnings)
 
     token = uuid.uuid4().hex
     _outputs[token] = output_path
@@ -118,7 +153,7 @@ def run():
             "warn_count": len(warns),
             "info_count": len(infos),
         },
-        "warnings": warnings_json,
+        "reminders": reminders,
     })
 
 
@@ -129,6 +164,14 @@ def download(token: str):
         return jsonify({"error": "下载链接已失效，请重新运行"}), 404
     out_name = os.path.basename(path)
     return send_file(path, as_attachment=True, download_name=out_name)
+
+
+@app.route("/template")
+def template():
+    path = os.path.join(root, "排班计划.xlsx")
+    if not os.path.isfile(path):
+        return jsonify({"error": "模板文件不存在"}), 404
+    return send_file(path, as_attachment=True, download_name="排班计划.xlsx")
 
 
 def _open_browser():
