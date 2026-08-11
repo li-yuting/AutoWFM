@@ -105,6 +105,7 @@ detail_modes:
       groups: ["甲组", "乙组", "丙组", "丁组", "戊组", "己组", "庚组", "辛组"]
       row_exclude:
         eq_columns: ["建立坐席", "接收坐席"]   # 两列值相等则排除该行（如排除自建自接工单）；未配置则不过滤
+        exclude_groups: ["丙组", "丁组", "戊组", "己组", "庚组", "辛组"]  # 仅对这些组应用排除；未列出（如甲组/乙组）保留全部行；省略则对所有组生效
     data:
       isDesensitization: true
       exports: ""

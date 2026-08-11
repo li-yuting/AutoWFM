@@ -43,6 +43,26 @@ def main():
     c_noexc = detail.count_groups(df3, fcfg_noexc)
     assert c_noexc == {"转接一组": 3, "转接二组": 1}, c_noexc
 
+    # exclude_groups：仅对列出的组排除等值行，其余组全保留
+    # df5: 转接一组有1行等值(应排除)，常规工单处理组有1行等值(不排除，不在 exclude_groups)
+    df5 = pd.DataFrame({
+        "建立坐席": ["甲","乙","丙","丁"],
+        "接收坐席": ["乙","乙","丙","戊"],   # 第2、3行建立==接收
+        "接收组":   ["转接一组","转接一组","常规工单处理组","常规工单处理组"],
+    })
+    fcfg5 = {
+        "group_column": "接收组",
+        "groups": ["转接一组", "常规工单处理组"],
+        "row_exclude": {
+            "eq_columns": ["建立坐席", "接收坐席"],
+            "exclude_groups": ["转接一组"],  # 仅转接一组排除，常规工单处理组保留全部
+        },
+    }
+    c5 = detail.count_groups(df5, fcfg5)
+    # 转接一组: 第1行不等(保留)+第2行等值但在exclude_groups内(排除) = 1
+    # 常规工单处理组: 第3行等值但不在exclude_groups(保留)+第4行不等(保留) = 2
+    assert c5 == {"转接一组": 1, "常规工单处理组": 2}, c5
+
     # 会话记录既有配置（channel + group，无 row_exclude）保持原语义
     df4 = pd.DataFrame({
         "渠道来源": ["电话呼入呼入","在线客服呼入呼入","电话呼入"],

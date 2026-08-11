@@ -7,6 +7,7 @@ import pandas as pd
 
 def _apply_row_exclude(d, fcfg):
     """行级排除：filter.row_exclude.eq_columns 列出的两列值相等则剔除该行。
+    可选 exclude_groups：仅对这些组应用排除（其余组保留全部行）。
     未配置或配置不完整则原样返回（向后兼容）。"""
     rc = fcfg.get("row_exclude")
     if not rc:
@@ -17,7 +18,14 @@ def _apply_row_exclude(d, fcfg):
     c0, c1 = cols[0], cols[1]
     if c0 not in d.columns or c1 not in d.columns:
         return d  # 列不存在时不过滤，避免 KeyError 中断采集
-    return d[d[c0] != d[c1]]
+    eq_mask = d[c0] == d[c1]  # 两列相等
+    exc_groups = rc.get("exclude_groups")
+    if exc_groups:
+        gc = fcfg.get("group_column")
+        if gc and gc in d.columns:
+            # 仅对 exclude_groups 内的组排除等值行，其余组全保留
+            return d[~(eq_mask & d[gc].isin(exc_groups))]
+    return d[~eq_mask]
 
 def count_groups(df, fcfg):
     d = df

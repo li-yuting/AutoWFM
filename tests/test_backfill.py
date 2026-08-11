@@ -72,6 +72,26 @@ def test_build_snapshots_row_exclude():
     assert rows[1]["转接一组"] == 1, rows[1]   # 09:05 cum = 09:02
     assert rows[3]["转接二组"] == 0, rows[3]   # 09:12 被排除，转接二组仍为 0
 
+def test_build_snapshots_exclude_groups():
+    import pandas as pd
+    # 09:02 转接一组 建立!=接收(保留)；09:07 转接一组 建立==接收(在exclude_groups内,排除)
+    # 09:12 常规工单处理组 建立==接收(不在exclude_groups,保留)
+    df = pd.DataFrame({
+        "创建日期": ["2026-07-15 09:02:00", "2026-07-15 09:07:00", "2026-07-15 09:12:00"],
+        "建立坐席": ["甲", "乙", "丙"],
+        "接收坐席": ["丁", "乙", "丙"],   # 第2、3行 建立==接收
+        "接收组": ["转接一组", "转接一组", "常规工单处理组"],
+    })
+    fcfg = {"group_column": "接收组", "groups": ["转接一组", "常规工单处理组"],
+            "row_exclude": {"eq_columns": ["建立坐席", "接收坐席"],
+                            "exclude_groups": ["转接一组"]}}
+    rows, total = backfill.build_snapshots(df, "2026-07-15", fcfg, ["转接一组", "常规工单处理组"],
+                                           "创建日期", "%Y-%m-%d %H:%M:%S", "09:00", "21:04")
+    # 转接一组: 第1行保留+第2行排除 = 1；常规工单处理组: 第3行等值但不在exclude_groups = 1
+    assert total == {"转接一组": 1, "常规工单处理组": 1}, total
+    assert rows[1]["转接一组"] == 1, rows[1]   # 09:05 cum = 09:02
+    assert rows[3]["常规工单处理组"] == 1, rows[3]  # 09:12 保留
+
 def test_backfill_source():
     import yaml, pandas as pd
     cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml"), encoding="utf-8"))
@@ -118,6 +138,7 @@ def main():
     test_build_snapshots_gongdan()
     test_build_snapshots_channel()
     test_build_snapshots_row_exclude()
+    test_build_snapshots_exclude_groups()
     test_build_snapshots_cutoff()
     test_backfill_source()
     print("backfill OK")
