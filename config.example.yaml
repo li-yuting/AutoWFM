@@ -103,6 +103,8 @@ detail_modes:
     filter:
       group_column: "组别列名"
       groups: ["甲组", "乙组", "丙组", "丁组", "戊组", "己组", "庚组", "辛组"]
+      row_exclude:
+        eq_columns: ["建立坐席", "接收坐席"]   # 两列值相等则排除该行（如排除自建自接工单）；未配置则不过滤
     data:
       isDesensitization: true
       exports: ""
