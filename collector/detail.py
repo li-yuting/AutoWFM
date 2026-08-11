@@ -5,11 +5,26 @@ import warnings
 import requests
 import pandas as pd
 
+def _apply_row_exclude(d, fcfg):
+    """行级排除：filter.row_exclude.eq_columns 列出的两列值相等则剔除该行。
+    未配置或配置不完整则原样返回（向后兼容）。"""
+    rc = fcfg.get("row_exclude")
+    if not rc:
+        return d
+    cols = rc.get("eq_columns")
+    if not cols or len(cols) < 2:
+        return d
+    c0, c1 = cols[0], cols[1]
+    if c0 not in d.columns or c1 not in d.columns:
+        return d  # 列不存在时不过滤，避免 KeyError 中断采集
+    return d[d[c0] != d[c1]]
+
 def count_groups(df, fcfg):
     d = df
     if fcfg.get("channel_column"):
         d = d[d[fcfg["channel_column"]].isin(fcfg["channels"])]
     d = d[d[fcfg["group_column"]].isin(fcfg["groups"])]
+    d = _apply_row_exclude(d, fcfg)
     cnt = d.groupby(fcfg["group_column"]).size().to_dict()
     return {g: int(cnt.get(g, 0)) for g in fcfg["groups"]}
 

@@ -55,6 +55,23 @@ def test_build_snapshots_channel():
     assert total == {"转接一组": 1, "转接二组": 0}, total
     assert rows[1]["转接一组"] == 1, rows[1]   # 09:05 刻度 cum = <09:05 = 09:02
 
+def test_build_snapshots_row_exclude():
+    import pandas as pd
+    df = pd.DataFrame({
+        "创建日期": ["2026-07-15 09:02:00", "2026-07-15 09:07:00", "2026-07-15 09:12:00"],
+        "建立坐席": ["甲", "乙", "丙"],
+        "接收坐席": ["乙", "丁", "丙"],   # 第3行 建立==接收 被排除
+        "接收组": ["转接一组", "转接一组", "转接二组"],
+    })
+    fcfg = {"group_column": "接收组", "groups": ["转接一组", "转接二组"],
+            "row_exclude": {"eq_columns": ["建立坐席", "接收坐席"]}}
+    rows, total = backfill.build_snapshots(df, "2026-07-15", fcfg, ["转接一组", "转接二组"],
+                                           "创建日期", "%Y-%m-%d %H:%M:%S", "09:00", "21:04")
+    # 全天总计：转接一组2(第1、2行)，转接二组0(第3行被排除)
+    assert total == {"转接一组": 2, "转接二组": 0}, total
+    assert rows[1]["转接一组"] == 1, rows[1]   # 09:05 cum = 09:02
+    assert rows[3]["转接二组"] == 0, rows[3]   # 09:12 被排除，转接二组仍为 0
+
 def test_backfill_source():
     import yaml, pandas as pd
     cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml"), encoding="utf-8"))
@@ -100,6 +117,7 @@ def main():
     test_day_ops()
     test_build_snapshots_gongdan()
     test_build_snapshots_channel()
+    test_build_snapshots_row_exclude()
     test_build_snapshots_cutoff()
     test_backfill_source()
     print("backfill OK")
