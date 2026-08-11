@@ -72,13 +72,13 @@ seat_data: &seat_data
   skillCode: ""
 
 subs:
-  - {name: "热线",      endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: HFQ_OFFICIAL}}
-  - {name: "12378",     endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: SERVICE_12378}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
-  - {name: "热线明细",   endpoint: other,  screen: SEAT,       skill: "252", data: {<<: *seat_data, skillCode: "252"}}
-  - {name: "常规",      endpoint: other,  screen: SEAT,       skill: "520", data: {<<: *seat_data, skillCode: "520"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 73746}}}
-  - {name: "贷后",      endpoint: other,  screen: SEAT,       skill: "958", data: {<<: *seat_data, skillCode: "958"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 82997}}}
-  - {name: "12378明细",  endpoint: other,  screen: SEAT,       skill: "847", data: {<<: *seat_data, skillCode: "847", agentStatusDeptId: ""}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
-  - {name: "在线",      endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: "73745"}}
+  - {name: "热线",      endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: ""}}
+  - {name: "12378",     endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: ""}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
+  - {name: "热线明细",   endpoint: other,  screen: SEAT,       skill: "", data: {<<: *seat_data, skillCode: ""}}
+  - {name: "常规",      endpoint: other,  screen: SEAT,       skill: "", data: {<<: *seat_data, skillCode: ""}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: ""}}}
+  - {name: "贷后",      endpoint: other,  screen: SEAT,       skill: "", data: {<<: *seat_data, skillCode: ""}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: ""}}}
+  - {name: "12378明细",  endpoint: other,  screen: SEAT,       skill: "", data: {<<: *seat_data, skillCode: "", agentStatusDeptId: ""}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
+  - {name: "在线",      endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: ""}}
 
 detail_modes:
   会话记录:
