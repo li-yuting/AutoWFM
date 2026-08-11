@@ -86,10 +86,10 @@ detail_modes:
     date_fields: {start: staStartDt, end: endStartDt}
     date_format: "%Y-%m-%d %H:%M:%S"
     filter:
-      channel_column: "渠道来源"
-      channels: ["电话呼入呼入", "在线客服呼入呼入"]
-      group_column: "处理组别"
-      groups: ["转接一组", "转接二组", "贷后转接组", "回访组一组", "贷后回访组"]
+      channel_column: "渠道列名"
+      channels: ["渠道甲", "渠道乙"]
+      group_column: "组别列名"
+      groups: ["甲组", "乙组", "丙组", "丁组", "戊组"]
     data:
       columns: "startDt"
       orders: "DESC"
@@ -101,8 +101,8 @@ detail_modes:
     date_fields: {start: startCrtDt, end: endCrtDt}
     date_format: "%Y-%m-%d"
     filter:
-      group_column: "接收组"
-      groups: ["二线客诉处理组", "常规工单处理组", "回访组一组", "贷后回访组", "12378回访组", "转接一组", "转接二组", "贷后转接组"]
+      group_column: "组别列名"
+      groups: ["甲组", "乙组", "丙组", "丁组", "戊组", "己组", "庚组", "辛组"]
     data:
       isDesensitization: true
       exports: ""
