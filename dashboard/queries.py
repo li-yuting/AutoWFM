@@ -232,7 +232,7 @@ def build_day(date_str, data_dir="data"):
     inc_rx_succ = _inc_col_d(rx_f, rx, "接通量", h_other)
     inc_im_zrg = _inc_col_d(im_f, im, "转人工量", h_other)
     inc_im_fail = _inc_col_d(im_f, im, "转人工失败", h_other)
-    inc_im_succ = {h: (inc_im_zrg[h] - inc_im_fail[h]) if inc_im_zrg[h] is not None else None for h in h_other}
+    inc_im_succ = {h: (inc_im_zrg[h] - inc_im_fail[h]) if (inc_im_zrg[h] is not None and inc_im_fail[h] is not None) else None for h in h_other}
     inc_z_zrg = _inc_col_d(z_f, z, "转人工量", h_12378)
     inc_z_succ = _inc_col_d(z_f, z, "接通量", h_12378)
     inc_z_hf = _inc_col_d(gd_f, gd, "12378回访组", h_12378)
@@ -397,8 +397,8 @@ def build_day(date_str, data_dir="data"):
         "inbound": inbound, "outbound": outbound,
         "card": {"inbound": card_in, "outbound": card_out},
         "tables": {"inbound": in_rows, "outbound": out_rows},
-        "headers": {"inbound": _table_header(in_rows[0].keys()),
-                    "outbound": _table_header(out_rows[0].keys())},
+        "headers": {"inbound": _table_header(in_rows[0].keys()) if in_rows else {"label": "小时", "groups": []},
+                    "outbound": _table_header(out_rows[0].keys()) if out_rows else {"label": "小时", "groups": []}},
     }
 
 def _rate(num, den):

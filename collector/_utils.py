@@ -47,7 +47,9 @@ def in_window(cfg, sub=None, now=None):
     mins = now.hour * 60 + now.minute
     sch = sub.get("schedule") if sub else None
     if sch and ("weekday" in sch or "weekend" in sch):
-        w = sch["weekday"] if now.weekday() < 5 else sch["weekend"]
+        # 只配 weekday 或只配 weekend 时,缺失侧 fallback 到另一侧,避免 KeyError
+        key = "weekday" if now.weekday() < 5 else "weekend"
+        w = sch.get(key) or sch.get("weekday") or sch.get("weekend")
         start, end = parse_hhmm(w["start"]), parse_hhmm(w["end"])
     else:
         g = cfg["schedule"]

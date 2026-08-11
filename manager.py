@@ -128,6 +128,30 @@ def schedule_text(cfg: dict, now: dt.datetime) -> str:
     return f"每日计划({day}): {fmt_hhmm(start)} 自动启动 → {fmt_hhmm(stop)} 自动停止"
 
 
+def _pid_alive(pid: int) -> bool:
+    """探活进程是否存在。Windows 用 tasklist,其他平台用 os.kill(pid,0)。
+    探活命令异常时保守返回 True(不误杀),仅明确无此进程才返回 False。"""
+    if pid is None:
+        return False
+    if os.name == "nt":
+        try:
+            r = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=3,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return str(pid) in r.stdout and "没有运行的任务" not in r.stdout
+        except Exception:
+            return True  # 探活命令异常,保守认为存活,避免误清
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+
+
 # ── 受管任务 ────────────────────────────────────────────────────────
 
 class ManagedTask:
@@ -364,6 +388,13 @@ class ManagedTask:
                                            "msg": f"{self.name} 连续重启 {MAX_FAILURES} 次失败,已暂停自动重启。\n请检查日志:{self.log_path}"})
                         return events
                     self.start(automatic=True)
+            elif self.external_pid is not None:
+                # 接管的外部进程:周期探活,死亡则清理并重启(否则 UI 永远显示"运行中(外部)")
+                if not _pid_alive(self.external_pid):
+                    log.warning("%s: 外部进程 pid=%s 已退出,清理并重启", self.name, self.external_pid)
+                    self.external_pid = None
+                    if not self.user_stopped:
+                        self.start(automatic=True)
             elif self.external_pid is None:
                 # 没有任何进程
                 if not self.user_stopped and self.restart_failures >= MAX_FAILURES:
@@ -641,7 +672,7 @@ class ManagerUI:
         popup.resizable(False, False)
         popup.grab_set()
         tk.Label(popup, text=title, font=("Microsoft YaHei UI", 14, "bold"), fg="#aa2222").pack(pady=(18, 8))
-        tk.Label(popup, text=f"{message}\n\n时间: {now:%Y-%m-%d %H:%M:%S}", justify=tk.LEFT, wraplength=440).pack(padx=20, pady=8, fill=tk.X)
+        tk.Label(popup, text=f"{message}\n\n时间: {dt.datetime.now():%Y-%m-%d %H:%M:%S}", justify=tk.LEFT, wraplength=440).pack(padx=20, pady=8, fill=tk.X)
         tk.Button(popup, text="知道了", width=12, command=popup.destroy).pack(pady=12)
         popup.lift()
         popup.focus_force()

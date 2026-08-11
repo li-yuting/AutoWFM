@@ -102,4 +102,7 @@ def index():
     return render_template("dashboard.html", view=view, date=date, data=data, latest_date=latest)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=os.environ.get("AUTOWFM_DEBUG", "1") == "1")
+    # 默认关闭 debug(避免 Werkzeug /console RCE);显式 AUTOWFM_DEBUG=1 时开启,
+    # 但此时强制绑 127.0.0.1 仅本机访问,杜绝 debugger 暴露到局域网
+    _debug = os.environ.get("AUTOWFM_DEBUG", "0") == "1"
+    app.run(host="127.0.0.1" if _debug else "0.0.0.0", port=8080, debug=_debug)

@@ -1,309 +1,135 @@
-# AutoWFM 架构评估与演进规划
+# AutoWFM 项目代码审查报告
 
-> **文档性质**：架构评审 + 演进路线图
-> **日期**：2026-08-07
-> **范围**：AutoWFM 全系统（采集器、看板、管理器、排班模块、预测模块）
+> 审查日期：2026-08-12 ｜ 模式：Plan（只读，未执行任何修改）
+> 审查范围：collector / dashboard / api / manager 全部子系统
+> 方法：两个 Explore agent 深度审查 + 人工核实所有 P0/P1 发现
 
----
-
-## 一、现状评估
-
-### 1.1 当前架构概述
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    manager.py (桌面监管器)                │
-│              自动启停 · 崩溃重启 · 托盘 · 开机自启          │
-└──────────┬──────────────────────────────┬───────────────┘
-           │ 子进程                        │ 子进程
-           ▼                              ▼
-┌─────────────────────┐          ┌─────────────────────┐
-│  collector/ (写入端) │          │  dashboard/ (只读端) │
-│  APScheduler 5min   │          │  Flask :8080        │
-│  ws_job(7线程)      │  共享    │  queries.py         │
-│  detail_job(2线程)  │◄────────►│  Chart.js           │
-│  notify/forecast/   │  data/   │  日/月视图           │
-│  backfill           │  9×.db   │                     │
-└──────────┬──────────┘          └─────────────────────┘
-           │
-     ┌─────┴─────┐
-     ▼           ▼
-  WS监控源    CRM明细导出
-  (7路)       (2路)
-```
-
-### 1.2 做得好的地方
-
-| 决策 | 为什么好 |
-|------|----------|
-| 采集/看板分离进程 | 读写隔离，看板崩溃不影响采集，符合 CQRS 思想 |
-| 9 个独立 SQLite | 每源一库，无线程锁竞争；故障域隔离（一个库损坏不波及其他） |
-| 配置驱动（config.yaml） | 新数据源只需加 YAML 条目，不改代码 |
-| 按源分窗口 | 12378 工作日/周末不同窗口，灵活且准确 |
-| 缺口检测 + 补采 | 连续 5 周期无数据告警，失败后延迟重试，保证数据完整性 |
-| 管理器自动启停 + 崩溃重启 | 30s 内崩溃计失败、连续 3 次暂停重启，防止无限重启风暴 |
-| 预测-实际差异告警 | 21:05 自动对比 OLS 预测与 CSV 预估，超 10% 发企微，数据质量有闭环 |
-
-### 1.3 架构债务与风险
-
-| 风险等级 | 问题 | 影响 |
-|----------|------|------|
-| **P0** | 无版本控制（无 git） | 无法回滚、无法协作、无法审计变更历史 |
-| **P0** | SQLite 单机文件 | 无法多机部署；文件锁导致写入串行；NFS/网络盘上不可靠 |
-| **P1** | 看板直连 SQLite | 无 API 层，前端无法独立演进；SQL 注入风险（虽然当前是只读+参数化） |
-| **P1** | 明文密钥在 config.yaml | token/tenementId 硬编码，泄露风险 |
-| **P1** | 无认证/授权 | 看板绑定 0.0.0.0:8080，任何能访问机器的人都能看 |
-| **P2** | 中文列名耦合 schema | 列名变更需要同时改 extractor + SCHEMAS + queries + 模板 |
-| **P2** | Playwright 截图在采集链路 | 截图失败/慢会拖慢 notify，进而影响 push_job 时效 |
-| **P2** | 无结构化日志/指标 | 出问题靠翻文本日志，无法快速定位 |
-| **P3** | 无数据库迁移策略 | SCHEMAS 变更需手动处理已有数据 |
-| **P3** | 无容器化/部署自动化 | 换机器部署靠手动复制 |
-
-### 1.4 质量属性评估
-
-| 属性 | 当前评分(1-5) | 瓶颈 |
-|------|---------------|------|
-| 可维护性 | ★★★☆☆ | 无 git；中文列名耦合；无 API 层 |
-| 可扩展性 | ★★☆☆☆ | SQLite 单机；无消息队列；采集器单实例 |
-| 可靠性 | ★★★★☆ | 缺口检测、补采、崩溃重启做得好；但无多副本 |
-| 可观测性 | ★★☆☆☆ | 纯文本日志，无指标、无追踪 |
-| 安全性 | ★★☆☆☆ | 明文密钥、无认证、看板绑定 0.0.0.0 |
-| 性能 | ★★★★☆ | 5 分钟粒度对当前规模足够；月视图聚合在 Python 层做，数据量大后会慢 |
+共发现 **24 个真实 bug/缺陷**，按严重程度分级如下。每条均已核实触发条件真实存在。
 
 ---
 
-## 二、目标架构
+## P0 阻断（必须立即修）
 
-### 2.1 演进原则
+### #1 manager.py:644 `_show_alert` 引用未定义变量 `now`（告警机制失效 + UI 冻结）
 
-1. **不重写** — 每个阶段独立交付价值，系统始终可运行
-2. **API 先行** — 在存储和展示之间插入 API 层，是所有后续演进的前提
-3. **存储可替换** — SQLite → PostgreSQL 的切换通过 Repository 模式隔离
-4. **采集可扩展** — 新数据源 = 新插件，不改核心调度逻辑
-5. **安全左移** — 认证、密钥管理在 Phase 1 就解决，不拖到最后
-
-### 2.2 目标架构图
-
-```
-                         ┌──────────────┐
-                         │  管理器/运维   │
-                         │  (systemd/    │
-                         │   supervisor) │
-                         └──────┬───────┘
-                                │
-          ┌─────────────────────┼─────────────────────┐
-          │                     │                     │
-          ▼                     ▼                     ▼
-  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-  │  采集器集群   │    │   API 服务    │    │   前端 SPA   │
-  │  collector/   │    │  FastAPI     │    │  Vue/React   │
-  │  插件化源     │───►│  REST + WS   │◄───│  实时看板    │
-  │  水平扩展     │    │  认证/授权   │    │  告警配置    │
-  └──────┬───────┘    └──────┬───────┘    └──────────────┘
-         │                   │
-         │    ┌──────────┐   │
-         └───►│ 消息队列  │◄──┘
-              │  Redis/   │
-              │  NATS     │
-              └─────┬────┘
-                    │
-              ┌─────┴────┐
-              │PostgreSQL │
-              │TimescaleDB│
-              │(时序数据)  │
-              └──────────┘
-```
-
-### 2.3 核心架构决策
-
-#### ADR-001: 引入 API 层（FastAPI）
-
-**状态**：提议
-
-**上下文**：当前 dashboard/queries.py 直接 SQL 查询 SQLite，前端模板渲染。这导致：
-- 前端无法独立演进（改看板必须改 Flask 模板）
-- 无法提供数据给第三方系统（如企微机器人直接查数据）
-- SQL 逻辑散落在 queries.py，无法复用
-
-**决策**：在存储层和展示层之间引入 FastAPI 服务，提供 REST + WebSocket API。
-
-**后果**：
-- (+) 前端可以独立演进为 SPA，或保持服务端渲染但调 API
-- (+) 第三方系统可以订阅数据
-- (+) API 层统一做认证、限流、缓存
-- (-) 多一个进程要维护
-- (-) 增加一次网络跳转延迟
-
-**替代方案**：
-- GraphQL：灵活但过度设计，当前查询模式固定
-- 保持直连：省事但堵死所有后续演进
+- **位置**：`manager.py` 第 644 行
+- **代码**：`tk.Label(popup, text=f"{message}\n\n时间: {now:%Y-%m-%d %H:%M:%S}", ...)`
+- **触发**：任一任务触发告警（如采集器连续 3 次崩溃重启）。`now` 变量仅存在于 `_refresh` 的局部作用域，`_show_alert` 内未定义。
+- **影响**：`popup.grab_set()`（642 行）已执行 → 弹出空白模态窗口、无"知道了"按钮、无法关闭；`NameError` 被 `_refresh` 的 try 吞掉继续轮询，但模态弹窗冻结整个 UI。**3 次失败告警机制彻底失效且锁死界面**。
+- **修复方向**：`_show_alert` 内改用 `dt.datetime.now().astimezone()`，或把 `now` 作为参数传入。
 
 ---
 
-#### ADR-002: SQLite → PostgreSQL + TimescaleDB
+## P1 严重（高频触发，影响数据正确性/可用性）
 
-**状态**：提议（Phase 2 执行）
+### #2 scheduler.py:66-96 缺口计数器首轮成功永不重置
 
-**上下文**：SQLite 在单机单写入者场景表现优秀，但：
-- 无法多机部署（文件锁）
-- 时间序列查询（小时聚合、月聚合）在 Python 层做，数据量大后慢
-- 无并发写入能力
+- **位置**：`collector/scheduler.py` 第 66-96 行
+- **触发**：某源首轮采集成功（line 76），不调用 `_track_gap(s["name"], True, cfg)`；只有补采成功（line 92）才调用。
+- **影响**：历史失败计数器永不归零，`_GAP_ALERTED` 永不清除。一旦触发过缺口告警，后续任何失败都因 `name in _GAP_ALERTED` 而不再告警。
+- **修复**：首轮成功时也调用 `_track_gap(s["name"], True, cfg)`。
 
-**决策**：迁移到 PostgreSQL，启用 TimescaleDB 扩展管理时序数据。
+### #3 notify.py check_alerts 无去重/节流（告警轰炸）
 
-**后果**：
-- (+) 支持多采集器并发写入
-- (+) TimescaleDB 的 continuous aggregates 替代 Python 层聚合，月视图从秒级到毫秒级
-- (+) 标准 SQL，生态丰富
-- (-) 需要运维 PostgreSQL
-- (-) 部署复杂度增加
+- **位置**：`collector/notify.py` `check_alerts`（被 `scheduler.py:100` 每个 ws_job 周期调用）
+- **触发**：排队量持续超阈值时，每 5 分钟发一条企微 text 告警（每小时 12 条）。
+- **影响**：告警刷屏，掩盖真实问题；企微群被噪音淹没。
+- **修复**：维护模块级 `_ALERTED` 集合，仅在状态变化（未超阈→超阈）时发送，恢复时清零。
 
-**替代方案**：
-- 保持 SQLite：到数据量瓶颈再说（但到那时迁移成本更高）
-- InfluxDB：时序专用但 SQL 生态弱，团队学习成本高
-- DuckDB：分析强但无并发写入
+### #4 backfill.py:142,157-161 当天回填 cutoff 早于窗口起时刻时清空数据不写入
 
-**迁移策略**：Repository 模式。collector/storage.py 定义抽象接口，先实现 SQLiteRepository，再实现 PostgresRepository，通过配置切换。
+- **位置**：`collector/backfill.py` 第 142、157-161 行
+- **触发**：`now=datetime.now()`（凌晨/清晨）；`day == today_str` 且 `now` 早于 `win_start`（09:00）时，`cutoff_slot < start_slot`，`build_snapshots` 返回空 `rows=[]`。但 `clear_day`（line 159）仍执行。
+- **影响**：当天已有数据被删除，无新行写入，数据丢失。manager.py 调用未传 `now`，会触发此路径。
+- **修复**：`rows` 为空时跳过 `clear_day`；或 `cutoff <= win_start` 时不处理当天。
 
----
+### #5 _utils.py:49-51 sub 仅配 weekday 无 weekend 时周末 KeyError
 
-#### ADR-003: 消息队列解耦采集与存储
+- **位置**：`collector/_utils.py` 第 49-51 行
+- **代码**：`if sch and ("weekday" in sch or "weekend" in sch): w = sch["weekday"] if now.weekday() < 5 else sch["weekend"]`
+- **触发**：sub 只配了 `weekday`，周末访问 `sch["weekend"]` 直接 KeyError，ws_job 中 `in_window` 异常导致整个周期失败。
+- **影响**：该源周末全天采集失败。
+- **修复**：条件改为 `and`，或 `sch.get("weekend", sch["weekday"])`。
 
-**状态**：提议（Phase 2 执行）
+### #6 queries.py:400 空数据时 `_table_header(in_rows[0].keys())` IndexError
 
-**上下文**：当前 ws_job 采集完直接写 SQLite。如果存储慢或失败，采集线程被阻塞，可能错过下一周期。
+- **位置**：`dashboard/queries.py` 第 400 行
+- **触发**：查看完全无采集的日期（节假日/未来日），所有 `hourly_*` 返回 `{}` → `_src_hours` 空 → `table_hours=[]` → `in_rows=[]` → `in_rows[0]` 崩溃。
+- **影响**：`build_day` 抛异常，看板/API 返回 500。
+- **修复**：`in_rows` 为空时返回占位 headers。
 
-**决策**：采集器将数据 publish 到 Redis Streams（或 NATS），由独立的 writer 消费并写入数据库。
+### #7 queries.py:235 `inc_im_zrg[h] - inc_im_fail[h]` TypeError
 
-**后果**：
-- (+) 采集和存储解耦，互不影响
-- (+) 存储失败时数据在队列中不丢失
-- (+) 可以水平扩展多个 writer
-- (-) 引入 Redis/NATS 运维成本
-- (-) 最终一致性（采集到入库有毫秒级延迟）
+- **位置**：`dashboard/queries.py` 第 235 行
+- **代码**：`inc_im_succ = {h: (inc_im_zrg[h] - inc_im_fail[h]) if inc_im_zrg[h] is not None else None ...}`
+- **触发**：在线快照中 `转人工失败` 列为 NULL（`inc_im_fail[h]` 为 None）而 `转人工量` 有值时，`int - None` 抛 TypeError。guard 仅判 `inc_im_zrg[h] is not None`。
+- **影响**：`build_day` 崩溃，看板 500。
+- **修复**：fail 为 None 时按 0 处理，或整体返回 None。
 
-**替代方案**：
-- 保持直连：简单但耦合
-- Kafka：功能强但对当前规模过重
+### #8 queries.py:330-340 card 用合并 `cur` 取热线/在线值（落后组显示 0）
 
----
+- **位置**：`dashboard/queries.py` card 构建段
+- **触发**：`cur = max(rx∪im∪z 小时)`；采集器不同步时（如在线已采到 15:05 产生 hour=15，热线仍停在 14:55），`rx.get(cur)` 为 None → `rx_zrg=0`、`rx_cum=0`。12378 已用 `z_cur=max(z)` 独立取值，热线/在线未做同样处理。
+- **影响**：落后组的卡片转人工量/时段预测量显示 0，流入率 None，全天累计卡片偏小。
+- **修复**：每组用各自 `max(hourly)` 取值，与 12378 一致。
 
-#### ADR-004: 密钥管理
+### #9 manager.py:339-376 external_pid 进程无健康检查（僵尸显示）
 
-**状态**：提议（Phase 1 执行）
-
-**上下文**：config.yaml 明文存储 token、tenementId、webhook key。
-
-**决策**：短期用环境变量 + python-dotenv；长期用 Windows DPAPI 或 HashiCorp Vault。
-
-**后果**：
-- (+) 密钥不进代码库
-- (+) 不同环境用不同密钥
-- (-) 部署时需要额外配置环境变量
-
----
-
-#### ADR-005: 看板认证
-
-**状态**：提议（Phase 1 执行）
-
-**上下文**：看板绑定 0.0.0.0:8080，无认证。
-
-**决策**：Phase 1 加最简单的 Token 认证（HTTP Bearer）；Phase 2 接入企业微信 OAuth2（扫码登录，自动识别身份）。
-
-**后果**：
-- (+) 数据不再裸奔
-- (+) 企微 OAuth 可以按人/按部门控制可见范围
-- (-) 增加登录步骤
+- **位置**：`manager.py` 第 339-376 行
+- **触发**：`_find_external_pid` 接管外部进程后 `self.process=None`、`self.external_pid=pid`；tick 中 `if self.process is not None`（False）→ `elif self.external_pid is None`（False）→ **两个分支都不执行**。
+- **影响**：外部进程死亡后 `external_pid` 陈旧，UI 永远显示"运行中(外部)"，不重启、不告警；自动启动也不触发。仅手动停止再启动可恢复。
+- **修复**：周期性探活 external_pid（`os.kill(pid,0)` 或 tasklist 查询），死亡则清空 `external_pid` 并走重启逻辑。
 
 ---
 
-#### ADR-006: 采集器插件化
+## 安全（P1 级）
 
-**状态**：提议（Phase 3 执行）
+### #10 dashboard/app.py:105 默认 debug=True + 0.0.0.0 + Werkzeug debugger RCE
 
-**上下文**：当前 7 路 WS + 2 路 requests 硬编码在 config.yaml，新增数据源需要改代码。
-
-**决策**：定义 `CollectorPlugin` 协议（`collect(config) -> dict`），新数据源实现插件并注册。
-
-**后果**：
-- (+) 新数据源 = 新 Python 文件 + config.yaml 条目
-- (+) 第三方可以贡献插件
-- (-) 需要设计稳定的插件接口
+- **位置**：`dashboard/app.py` 第 105 行
+- **代码**：`app.run(host="0.0.0.0", port=8080, debug=os.environ.get("AUTOWFM_DEBUG", "1") == "1")`
+- **触发**：直接 `python -m dashboard.app` 启动（未经 manager），`AUTOWFM_DEBUG` 默认 "1"=True，绑 0.0.0.0:8080；若 `AUTOWFM_DASH_TOKEN` 未设则 before_request 放行。
+- **影响**：网络可达时 Werkzeug `/console` 可执行任意代码（RCE）。manager 启动会设 `AUTOWFM_DEBUG=0`，但直接启动路径不安全。
+- **修复**：默认 `debug=False`；或默认绑 127.0.0.1；debug 模式强制要求 token。
 
 ---
 
-## 三、分阶段演进路线图
+## P2 一般（影响稳定性/边界场景）
 
-### Phase 1：地基加固（1-2 周）— 不引入新组件
-
-| 任务 | 工作量 | 价值 |
-|------|--------|------|
-| 初始化 git 仓库，提交现有代码 | 0.5h | 从此可回滚、可审计 |
-| 密钥移到环境变量 | 2h | 消除明文泄露风险 |
-| 看板加 Token 认证 | 4h | 数据不再裸奔 |
-| 结构化日志（JSON 格式 + request_id） | 4h | 可观测性基础 |
-| 健康检查端点 `/health` | 2h | 管理器可以精确判断进程健康 |
-| CI 基础（GitHub Actions / Gitea CI：跑测试） | 2h | 每次提交自动验证 |
-
-**退出条件**：`git log` 有提交历史；`config.yaml` 无明文密钥；看板需认证才能访问；CI 绿。
-
----
-
-### Phase 2：API 层 + 存储升级（2-4 周）— 引入 FastAPI + PostgreSQL
-
-| 任务 | 工作量 | 依赖 |
-|------|--------|------|
-| 定义 Repository 抽象接口 | 4h | — |
-| 实现 SQLiteRepository（包装现有 storage.py） | 2h | 接口 |
-| 实现 PostgresRepository + TimescaleDB | 8h | 接口 |
-| 搭建 FastAPI 服务，实现核心查询端点 | 8h | Repository |
-| 看板改为调 API（而非直连 SQLite） | 4h | FastAPI |
-| 数据迁移脚本（SQLite → PostgreSQL） | 4h | PostgresRepository |
-| 企微 OAuth2 登录 | 8h | FastAPI |
-| 消息队列（Redis Streams）解耦采集与存储 | 8h | PostgreSQL |
-
-**退出条件**：看板通过 API 获取数据；PostgreSQL 承载全部读写；采集器与存储通过队列解耦。
+| # | 位置 | 问题 | 修复方向 |
+|---|------|------|----------|
+| 11 | repository.py:54 / notify.py:26 | SQLite 无 `busy_timeout`，并发读写 "database is locked" | `sqlite3.connect(path, timeout=30)` |
+| 12 | ws.py:11-12 | `REASON_MAP` 无任何 reason 映射到"回访"，回访人数被算入小休 | 补全映射（如 `"callback":"回访"`） |
+| 13 | forecast.py:159 | 空历史时 `pd.date_range(NaT)` 崩溃，`run_forecast`/`main()` 未捕获 | 入口校验 `history.empty` |
+| 14 | detail.py:33-34 | `channel_column`/`group_column` 不在 DataFrame 时 KeyError | 访问前校验列存在 |
+| 15 | _utils.py:62 | `load_dotenv()` 无路径，CWD 非项目根时 .env 不加载，密钥静默为空 | `load_dotenv(Path(__file__).resolve().parent.parent / ".env")` |
+| 16 | main.py:37 | `basicConfig` 若 root logger 已有 handler 则 no-op，JsonFormatter 不生效 | 加 `force=True` |
+| 17 | notify.py:192 | `networkidle` 对长连接看板永不 settle，30s 超时后截图恒返回 None | 改 `domcontentloaded` + `wait_for_selector` |
+| 18 | scheduler.py:84 | `time.sleep(delay)` 串行补采 7 源，叠加首轮可能 > 60s misfire_grace | 补采也用 `pool.submit` 并行 |
+| 19 | queries.py:242/246/249/252 | 求和 guard 不一致，guard 列有值而其他子列 None 时返回部分和 | 任一子列 None 则整体 None |
+| 20 | manager.py:395 | 排班 `match_key="app.py"` 过宽，匹配任意跑 app.py 的 python 进程 | 用 `shift\\app.py` 全路径片段 |
+| 21 | api/app.py:65 | API 绑 0.0.0.0:8081，token 未设则无认证 | 默认绑 127.0.0.1 |
+| 22 | queries.py `_inc_d` | 末小时 h=20 依赖 `first[21]` 闭合，若 21:00 快照缺失则漏算 20:55-21:00 | 确保 21:00 末采或 window_end 闭区间 |
+| 23 | api/app.py | 无全局异常处理，`queries.build_day` 抛错直接 500 + 明文 traceback 泄露 | 加 `@app.exception_handler` |
 
 ---
 
-### Phase 3：平台化（4-8 周）— 水平扩展 + 插件化
+## P3 改进（可选优化）
 
-| 任务 | 工作量 |
-|------|--------|
-| 采集器插件化架构（CollectorPlugin 协议） | 8h |
-| 前端 SPA（Vue3/React，实时 WebSocket 推送） | 16h |
-| 告警规则引擎（可配置阈值、抑制、升级） | 8h |
-| Docker Compose 一键部署 | 4h |
-| Prometheus 指标采集 + Grafana 仪表盘 | 8h |
-| 多环境支持（dev/staging/prod） | 4h |
+| # | 位置 | 问题 | 修复方向 |
+|---|------|------|----------|
+| 24a | detail.py:60 / backfill.py:123 | `requests` 响应未 `close()`，高并发连接池可能耗尽 | `with requests.post(...) as resp:` |
+| 24b | backfill.py:76 | `pd.to_datetime(errors="coerce")` 格式不匹配时静默全零 | 校验 `ts.isna().all()` 时 raise |
+| 24c | forecast.py:50-52 | `forecast_at` 失败统一返回 0，与"无预测"不可区分 | 返回 None，渲染时显示 N/A |
+| 24d | queries.py:69/95 | `hourly_avg`/`daily_avg` 用 `r[c] or 0` 把 NULL 当 0 参与均值 | 跳过 None |
 
 ---
 
-### Phase 4：智能化（持续）— 超越监控
+## 建议执行顺序
 
-| 方向 | 描述 |
-|------|------|
-| 异常检测 | 超越固定阈值，用统计方法（3σ、孤立森林）自动识别异常模式 |
-| 智能排班 | 排班模块与预测联动，根据预测量自动建议人力配置 |
-| 根因分析 | 排队告警时自动关联同时段的签入/离席/系统事件，给出可能原因 |
-| 数据仓库 | 历史数据归档到 OLAP（ClickHouse/DuckDB），支持自由分析 |
+1. **第一批（P0 + 安全 + 高频 P1）**：#1、#10、#6、#7、#5、#9 — 修完即消除"界面冻结/RCE/看板 500/周末采集失败/僵尸进程"。
+2. **第二批（数据正确性 P1）**：#2、#3、#4、#8 — 数据/告警准确性。
+3. **第三批（P2 稳定性）**：#11-#23 — 边界与并发。
+4. **第四批（P3 优化）**：#24 — 可选。
 
----
-
-## 四、关键风险与缓解
-
-| 风险 | 概率 | 影响 | 缓解 |
-|------|------|------|------|
-| Phase 2 数据迁移丢数据 | 中 | 高 | 双写期（SQLite+PostgreSQL 并行写 1 周，对比一致后切流） |
-| FastAPI 引入后性能下降 | 低 | 中 | API 层加 Redis 缓存；月视图用 TimescaleDB continuous aggregates |
-| 团队学习成本（FastAPI/PostgreSQL/Docker） | 中 | 中 | 每 Phase 结束做内部分享；文档随代码更新 |
-| 过度设计 | 高 | 中 | 每 Phase 有明确退出条件；不满足就不进下一阶段 |
-
----
-
-## 五、总结
-
-AutoWFM 当前架构在**单机监控工具**这个定位上是合格的——采集/看板分离、按源分窗口、缺口检测、崩溃重启都做得扎实。核心债务是**无版本控制**和**无 API 层**，这两个不解决，后续所有演进都是空中楼阁。
-
-建议按 Phase 1 → 2 → 3 → 4 顺序推进，每个 Phase 独立交付价值，不重写、不中断服务。Phase 1 一周内完成，是性价比最高的投资。
+每批修完跑一遍 `Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }` 回归。修改遵循项目约定：纯 assert 测试、增量提交、不动数据契约。
