@@ -1,17 +1,26 @@
-# AutoWFM 配置模板（本文件入库；复制为 config.yaml 后由 .env 注入真实密钥）
+# AutoWFM 配置模板（本文件入库；复制为 config.yaml 后按实际环境填写）
 #
 # 用法：
 #   1. cp config.example.yaml config.yaml
-#   2. cp .env.example .env  并填入真实密钥
-#   3. config.yaml 与 .env 均被 .gitignore 忽略，不会入库
+#   2. 按本文件注释填入各业务参数（ws链接 / url / 手机号 / exports 等）
+#   3. cp .env.example .env 并填入密钥（token / tenementId / webhook / dash_token）
+#   4. config.yaml 与 .env 均被 .gitignore 忽略，不会入库
 #
+# 本模板已脱敏，以下字段留空，需手动填写：
+#   - endpoints.online / other          : WebSocket 连接地址
+#   - notify.screenshot_url             : 看板截图 URL
+#   - notify.alert.gap_recipient        : 采集缺口告警 @ 人（手机号）
+#   - notify.alert.recipients.*         : 各线路告警 @ 人（手机号）
+#   - forecast.alert_recipient          : 预测差异告警 @ 人（手机号）
+#   - subs[*].data.agentStatusDeptId    : 部门密钥 ID
+#   - detail_modes[*].url               : 明细导出 API 地址
+#   - detail_modes[*].data.exports      : 导出列名（逗号分隔）
 # 密钥字段（secrets.token / secrets.tenementId / notify.webhook.* / notify.dash_token）
-# 在本模板中留空，运行时由 .env 的 AUTOWFM_* 环境变量覆盖（见 collector/_utils.py
-# _SECRET_ENV_MAP）。其余为业务参数，按需调整。
+# 由 .env 的 AUTOWFM_* 环境变量覆盖（见 collector/_utils.py _SECRET_ENV_MAP）。
 
 endpoints:
-  online: "ws://monitor-datawarehouse-cloud.weicai.com.cn:7100/im/monitor"
-  other:  "ws://monitor-datawarehouse-cloud.weicai.com.cn:7000/customer/monitor"
+  online: ""
+  other:  ""
 schedule:
   interval_minutes: 5
   window_start: "09:00"
@@ -36,7 +45,7 @@ logging:
   path: "logs/autowfm.log"
 
 notify:
-  screenshot_url: "http://127.0.0.1:8080/"   # 改8080后换这里;用 127.0.0.1 避免 localhost IPv6 回退延迟
+  screenshot_url: ""   # 看板地址，如 http://127.0.0.1:8080/
   push_minutes: [0, 15, 30, 45]
   push_wait_timeout: 30   # push_job 等待 ws/detail 当周期完成的最长秒数,超时退化为上一周期数据
   webhook:
@@ -47,15 +56,15 @@ notify:
     hotline_queue: 10
     online_queue: 20
     queue_12378: 1
-    gap_recipient: ["17629050914"]   # 采集缺口告警 @ 人(走 main_key)
+    gap_recipient: [""]   # 采集缺口告警 @ 人(走 main_key)
     recipients:
-      hotline: ["17629050914", "18829270926"]
-      online: ["17629050914", "18821657478"]
-      "12378": ["17629050914", "18629552489", "15091009979"]
+      hotline: ["", ""]
+      online: ["", ""]
+      "12378": ["", "", ""]
 
 forecast:
   diff_threshold: 0.10          # 相对差异阈值(|forecast-csv|/csv)，超过则告警
-  alert_recipient: ["17629050914"]
+  alert_recipient: [""]
   holidays_file: "holidays.txt" # 项目根
   output_dir: "output"
 
@@ -68,12 +77,12 @@ subs:
   - {name: "热线明细",   endpoint: other,  screen: SEAT,       skill: "252", data: {<<: *seat_data, skillCode: "252"}}
   - {name: "常规",      endpoint: other,  screen: SEAT,       skill: "520", data: {<<: *seat_data, skillCode: "520"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 73746}}}
   - {name: "贷后",      endpoint: other,  screen: SEAT,       skill: "958", data: {<<: *seat_data, skillCode: "958"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 82997}}}
-  - {name: "12378明细",  endpoint: other,  screen: SEAT,       skill: "847", data: {<<: *seat_data, skillCode: "847", agentStatusDeptId: "q40YvMUfzHi1y3aOr89s8lx3mTk55OluQVhDCmYH"}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
+  - {name: "12378明细",  endpoint: other,  screen: SEAT,       skill: "847", data: {<<: *seat_data, skillCode: "847", agentStatusDeptId: ""}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
   - {name: "在线",      endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: "73745"}}
 
 detail_modes:
   会话记录:
-    url: "https://callcenter-crm.weicai.com.cn/api/sheet/callLog/exportCL"
+    url: ""
     date_fields: {start: staStartDt, end: endStartDt}
     date_format: "%Y-%m-%d %H:%M:%S"
     filter:
@@ -86,9 +95,9 @@ detail_modes:
       orders: "DESC"
       fromTypeId: "TEL,ZXKF,QT"
       isDesensitization: true
-      exports: "cusCode,cusName,serviceTypeName,itemName,threeTypeName,startDt,remark,cusNum,crtName,crtDeptName,serviceLabelNameList,blackFlagName,busiTypeName,startTime,endTime,callDuration,fromTypeName,disconnectName,isSheet,code,dnis,id,endReasonName,staName,complaintName,appeaseName"
+      exports: ""
   工单明细:
-    url: "https://callcenter-crm.weicai.com.cn/api/sheet/list/exportCLSheet"
+    url: ""
     date_fields: {start: startCrtDt, end: endCrtDt}
     date_format: "%Y-%m-%d"
     filter:
@@ -96,4 +105,4 @@ detail_modes:
       groups: ["二线客诉处理组", "常规工单处理组", "回访组一组", "贷后回访组", "12378回访组", "转接一组", "转接二组", "贷后转接组"]
     data:
       isDesensitization: true
-      exports: "sheetNo,busCodeName,allTime,lastOperateTime,ext3,ext2,cusId,cusName,allocateStatus,statusName,sheetTypeName,busTypeName,threeTypeName,crtName,recOrgName,recName,uLevleName,serviceLabelNameList,blackFlagName,sourceName,sceneSecondTypeName,sceneThirdTypeName,complaintName,appeaseName"
+      exports: ""
