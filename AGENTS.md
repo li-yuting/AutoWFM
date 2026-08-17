@@ -18,7 +18,7 @@ Always use the `.venv` interpreter and set UTF-8 output. There is no build step.
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m collector.main       # 采集器 (per-source windows)
-.\.venv\Scripts\python.exe -m collector.forecast   # 一次性全量预测 CSV
+.\.venv\Scripts\python.exe -m peakflow.main --fetch # 一次性全量预测 (Excel + HTML)
 .\.venv\Scripts\python.exe -m dashboard.app        # 看板 http://127.0.0.1:8080
 .\.venv\Scripts\python.exe -m api.app              # API 服务 http://127.0.0.1:8081
 .\.venv\Scripts\python.exe manager.py              # 桌面管理器 (not -m)

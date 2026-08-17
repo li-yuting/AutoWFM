@@ -67,8 +67,8 @@ $env:PYTHONIOENCODING="utf-8"   # 输出中文前必须设置
 # 桌面管理器统一监管 4 个子进程
 .\.venv\Scripts\python.exe manager.py
 
-# 一次性全量进线量预测 CSV（输出到 output/）
-.\.venv\Scripts\python.exe -m collector.forecast
+# 一次性全量进线量预测（先同步 AutoTableau 数据，输出 Excel + HTML 到 output/）
+.\.venv\Scripts\python.exe -m peakflow.main --fetch
 ```
 
 ### 测试
