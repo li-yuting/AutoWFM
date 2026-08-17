@@ -20,6 +20,7 @@ env/
 # ---- 业务数据（SQLite + 预测 CSV）----
 data/*.db
 data/*.csv
+data/*.csv.bak
 data/screenshot.png
 data/!*.gitkeep
 
@@ -40,6 +41,7 @@ desktop.ini
 Thumbs.db
 
 # ---- 本地工具痕迹 ----
+.agents/
 .reasonix/
 .superpowers/
 .workbuddy/
