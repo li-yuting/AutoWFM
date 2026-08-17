@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, os, tempfile
+import sys, os, shutil, time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import base64, hashlib
@@ -7,6 +7,15 @@ import datetime
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collector import storage, notify
+
+# 工作区内临时目录：避免沙箱对系统 temp / mkdtemp 的写入限制（同 test_peakflow_main.py）
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
+
+def _tmp():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    d = os.path.join(_WS_TMP, f"t{os.getpid()}_{time.time_ns()}")
+    os.makedirs(d)
+    return d
 
 def _cfg(data_dir):
     return {
@@ -26,7 +35,7 @@ def _cfg(data_dir):
     }
 
 def test_latest_snapshot():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     storage.insert("热线", {"时间":"2026-07-28 09:05","转人工量":1,"接通量":1,"排队量":0,"累计呼入量":1,"外呼量":0,"外呼接通量":0}, d)
     storage.insert("热线", {"时间":"2026-07-28 11:00","转人工量":1108,"接通量":1106,"排队量":0,"累计呼入量":1187,"外呼量":0,"外呼接通量":0}, d)
     row = notify.latest_snapshot(d, "热线", "2026-07-28")
@@ -36,7 +45,7 @@ def test_latest_snapshot():
     print("latest_snapshot OK")
 
 def test_forecast_at():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     with open(Path(d)/"预估流入量.csv", "w", encoding="utf-8", newline="") as f:
         f.write("时间,线路,时段预估量,累计预估量\n")
         f.write("2026-07-28 11:00,热线,100,1187\n")
@@ -44,7 +53,7 @@ def test_forecast_at():
     assert notify.forecast_at(d, "热线", "2026-07-28 11:00") == 1187
     assert notify.forecast_at(d, "在线", "2026-07-28 11:00") == 811
     assert notify.forecast_at(d, "热线", "2026-07-28 12:00") == 0
-    assert notify.forecast_at(tempfile.mkdtemp(), "热线", "2026-07-28 11:00") == 0  # 无 CSV
+    assert notify.forecast_at(_tmp(), "热线", "2026-07-28 11:00") == 0  # 无 CSV
     print("forecast_at OK")
 
 def test_render_firstline():
@@ -105,7 +114,7 @@ def test_send_text_payload():
                                           "text": {"content": "hi", "mentioned_mobile_list": ["111", "222"]}})
 
 def test_send_img_payload():
-    d = tempfile.mkdtemp(); p = Path(d) / "t.png"; p.write_bytes(b"\x89PNG fake")
+    d = _tmp(); p = Path(d) / "t.png"; p.write_bytes(b"\x89PNG fake")
     with patch.object(notify, "_webhook", return_value="ok") as m:
         notify._send_img(str(p), "KEY")
         payload = m.call_args[0][1]
@@ -131,18 +140,18 @@ def _capture_alerts(cfg, now):
 def test_check_alerts_hotline():
     now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))  # 周二
     # 排队=10(>=阈值) 空闲=3(<10) -> 告警
-    d = tempfile.mkdtemp(); cfg = _cfg(d)
+    d = _tmp(); cfg = _cfg(d)
     storage.insert("热线", {"时间":"2026-07-28 11:00","转人工量":1,"接通量":1,"排队量":10,"累计呼入量":1,"外呼量":0,"外呼接通量":0}, d)
     storage.insert("热线明细", {"时间":"2026-07-28 11:00","签入":5,"通话":1,"空闲":3,"离席":0,"话后":1,"振铃":0,"置忙":0}, d)
     calls = _capture_alerts(cfg, now)
     assert any("热线排队" in c[2] and c[0] == "MAIN" for c in calls), calls
     # 排队=9(<阈值) -> 不告警
-    d2 = tempfile.mkdtemp(); cfg2 = _cfg(d2)
+    d2 = _tmp(); cfg2 = _cfg(d2)
     storage.insert("热线", {"时间":"2026-07-28 11:00","转人工量":1,"接通量":1,"排队量":9,"累计呼入量":1,"外呼量":0,"外呼接通量":0}, d2)
     storage.insert("热线明细", {"时间":"2026-07-28 11:00","签入":5,"通话":1,"空闲":0,"离席":0,"话后":1,"振铃":0,"置忙":0}, d2)
     assert _capture_alerts(cfg2, now) == [], "排队9不应告警"
     # 排队=10 空闲=10(>=排队) -> 不告警
-    d3 = tempfile.mkdtemp(); cfg3 = _cfg(d3)
+    d3 = _tmp(); cfg3 = _cfg(d3)
     storage.insert("热线", {"时间":"2026-07-28 11:00","转人工量":1,"接通量":1,"排队量":10,"累计呼入量":1,"外呼量":0,"外呼接通量":0}, d3)
     storage.insert("热线明细", {"时间":"2026-07-28 11:00","签入":5,"通话":1,"空闲":10,"离席":0,"话后":1,"振铃":0,"置忙":0}, d3)
     assert _capture_alerts(cfg3, now) == [], "空闲>=排队不应告警"
@@ -150,21 +159,21 @@ def test_check_alerts_hotline():
 
 def test_check_alerts_online():
     now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
-    d = tempfile.mkdtemp(); cfg = _cfg(d)
+    d = _tmp(); cfg = _cfg(d)
     storage.insert("在线", {"时间":"2026-07-28 11:00","转人工量":1,"转人工失败":0,"排队":20,"咨询":0,"在线":5,"小休":0,"示忙":0,"话后":0,"就餐":0,"培训":0,"回访":0}, d)
     assert any("在线排队" in c[2] for c in _capture_alerts(cfg, now))   # =20 告警
-    d2 = tempfile.mkdtemp(); cfg2 = _cfg(d2)
+    d2 = _tmp(); cfg2 = _cfg(d2)
     storage.insert("在线", {"时间":"2026-07-28 11:00","转人工量":1,"转人工失败":0,"排队":19,"咨询":0,"在线":5,"小休":0,"示忙":0,"话后":0,"就餐":0,"培训":0,"回访":0}, d2)
     assert _capture_alerts(cfg2, now) == [], "排队19不应告警"
     print("check_alerts_online OK")
 
 def test_check_alerts_12378():
     now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))  # 周二,在 12378 窗口
-    d = tempfile.mkdtemp(); cfg = _cfg(d)
+    d = _tmp(); cfg = _cfg(d)
     storage.insert("12378", {"时间":"2026-07-28 11:00","转人工量":1,"接通量":1,"排队量":1,"累计呼入量":1}, d)
     storage.insert("12378明细", {"时间":"2026-07-28 11:00","签入":3,"通话":1,"空闲":0,"离席":0,"话后":0,"振铃":0,"置忙":0}, d)
     assert any("12378排队" in c[2] and c[0] == "SECOND" for c in _capture_alerts(cfg, now))  # =1 告警
-    d2 = tempfile.mkdtemp(); cfg2 = _cfg(d2)
+    d2 = _tmp(); cfg2 = _cfg(d2)
     storage.insert("12378", {"时间":"2026-07-28 11:00","转人工量":1,"接通量":1,"排队量":0,"累计呼入量":1}, d2)
     storage.insert("12378明细", {"时间":"2026-07-28 11:00","签入":3,"通话":1,"空闲":0,"离席":0,"话后":0,"振铃":0,"置忙":0}, d2)
     assert _capture_alerts(cfg2, now) == [], "排队0不应告警"
@@ -173,7 +182,7 @@ def test_check_alerts_12378():
 def test_check_alerts_12378_window():
     now = datetime.datetime(2026, 8, 1, 18, 30, tzinfo=ZoneInfo("Asia/Shanghai"))  # 周六
     assert now.weekday() == 5, now.weekday()
-    d = tempfile.mkdtemp(); cfg = _cfg(d)
+    d = _tmp(); cfg = _cfg(d)
     storage.insert("12378", {"时间":"2026-08-01 18:00","转人工量":1,"接通量":1,"排队量":5,"累计呼入量":1}, d)
     storage.insert("12378明细", {"时间":"2026-08-01 18:00","签入":3,"通话":1,"空闲":0,"离席":0,"话后":0,"振铃":0,"置忙":0}, d)
     assert all("12378排队" not in c[2] for c in _capture_alerts(cfg, now)), "出窗口不应告警"
@@ -193,7 +202,7 @@ def _seed_full(d):
         f.write("时间,线路,时段预估量,累计预估量\n2026-07-28 11:00,热线,100,1187\n2026-07-28 11:00,在线,50,811\n")
 
 def test_send_report():
-    d = tempfile.mkdtemp(); cfg = _cfg(d); _seed_full(d)
+    d = _tmp(); cfg = _cfg(d); _seed_full(d)
     now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     md_calls = []; img_calls = []
     with patch.object(notify, "_send_md", lambda text, key: md_calls.append((text, key)) or "ok"), \
@@ -209,7 +218,7 @@ def test_send_report():
     print("send_report OK")
 
 def test_build_secondline_msg_empty():
-    d = tempfile.mkdtemp()   # 无任何 db
+    d = _tmp()   # 无任何 db
     assert notify.build_secondline_msg(d, "2026-07-28 11:15", "2026-07-28") == ""
     print("build_secondline_msg_empty OK")
 
@@ -231,14 +240,14 @@ def test_config_notify_block():
 def test_push_job_window_gate():
     from collector import scheduler
     # 出窗口(空窗口 (9,9] 永不成立)
-    cfg_out = _cfg(tempfile.mkdtemp())
+    cfg_out = _cfg(_tmp())
     cfg_out["schedule"]["window_start"] = "09:00"; cfg_out["schedule"]["window_end"] = "09:00"
     called = []
     with patch.object(notify, "send_report", lambda c: called.append(c)):
         scheduler.push_job(cfg_out)
     assert called == [], "出窗口不应调 send_report"
     # 在窗口(全天)
-    cfg_in = _cfg(tempfile.mkdtemp())
+    cfg_in = _cfg(_tmp())
     cfg_in["schedule"]["window_start"] = "00:00"; cfg_in["schedule"]["window_end"] = "23:59"
     called2 = []
     with patch.object(notify, "send_report", lambda c: called2.append(c)), \
@@ -249,7 +258,7 @@ def test_push_job_window_gate():
 
 def test_wait_cycle():
     from collector import scheduler
-    cfg = _cfg(tempfile.mkdtemp())
+    cfg = _cfg(_tmp())
     cfg["notify"]["push_wait_timeout"] = 1
     # mark 就绪 -> 立即返回(不阻塞)
     scheduler._last_ws_cycle = "2026-07-28 11:00"
@@ -282,6 +291,7 @@ def main():
     test_config_notify_block()
     test_push_job_window_gate()
     test_wait_cycle()
+    shutil.rmtree(_WS_TMP, ignore_errors=True)
     print("ALL notify tests OK")
 
 if __name__ == "__main__": main()

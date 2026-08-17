@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
-import sys, os, sqlite3, tempfile
+import sys, os, sqlite3, shutil, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pathlib import Path
 import dashboard.queries as Q
+
+# 工作区内临时目录：避免沙箱对系统 temp / mkdtemp 的写入限制（同 test_peakflow_main.py）
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
+
+def _tmp():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    d = os.path.join(_WS_TMP, f"t{os.getpid()}_{time.time_ns()}")
+    os.makedirs(d)
+    return d
 
 def _seed(d, source, cols, rows):
     con = sqlite3.connect(Path(d) / f"{source}.db")
@@ -13,7 +22,7 @@ def _seed(d, source, cols, rows):
     con.commit(); con.close()
 
 def test_hourly_latest():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "转人工量", "接通量"]
     rows = [
         ("2026-07-27 09:05", 10, 9),
@@ -28,11 +37,11 @@ def test_hourly_latest():
     assert out[9]["转人工量"] == 20, out[9]
     assert out[10]["转人工量"] == 30, out[10]
     # 空库
-    d2 = tempfile.mkdtemp()
+    d2 = _tmp()
     assert Q.hourly_latest(d2, "热线", "2026-07-27") == {}
 
 def test_daily_latest_and_avg():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "签入", "转人工量"]
     rows = [
         ("2026-07-01 09:05", 10, 100),
@@ -52,7 +61,7 @@ def test_daily_latest_and_avg():
     # 转人工量(累积)在 daily_avg 里也会被平均，但月视图只对瞬时列用 daily_avg，调用方负责
 
 def test_hourly_avg():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "签入", "转人工量"]
     rows = [
         ("2026-07-27 09:05", 10, 100),
@@ -66,7 +75,7 @@ def test_hourly_avg():
     assert avg[9]["签入"] == 15.0, avg[9]
     assert avg[10]["签入"] == 30.0, avg[10]
     # 空库
-    assert Q.hourly_avg(tempfile.mkdtemp(), "常规", "2026-07-27") == {}
+    assert Q.hourly_avg(_tmp(), "常规", "2026-07-27") == {}
 
 def _seed_csv(d, rows):
     import csv
@@ -77,7 +86,7 @@ def _seed_csv(d, rows):
             w.writerow(r)
 
 def test_forecast():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_csv(d, [
         ("2026-07-27 09:15", "热线", "100", "100"),
         ("2026-07-27 09:30", "热线", "50", "150"),   # 9 点最新累计=150；增量和=100+50=150
@@ -97,7 +106,7 @@ def test_forecast():
 
 def test_forecast_12378():
     import datetime
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "转人工量", "接通量"]
     rows = [
         ("2026-07-20 09:05", 10, 9),
@@ -110,7 +119,7 @@ def test_forecast_12378():
     assert fc[9] == 20, fc
     assert fc[10] == 25, fc
     # 7 天前无数据
-    d2 = tempfile.mkdtemp()
+    d2 = _tmp()
     assert Q.forecast_12378(d2, "2026-07-27") == {}
 
 def test_hours_for():
@@ -119,7 +128,7 @@ def test_hours_for():
     assert Q._hours_for("热线", "2026-07-25") == list(range(9, 21))   # 其余 9..20
 
 def test_build_day():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     # 热线(量)：09:00 与 10:00 两条累计快照(计数器隔夜归零)；10点仅整点一条=整点刚采完
     _seed(d, "热线", ["时间","转人工量","接通量","排队量","累计呼入量","外呼量","外呼接通量"],
           [("2026-07-27 09:00", 40, 38, 0, 80, 0, 0),
@@ -256,7 +265,7 @@ def test_build_day():
     assert [r["小时"] for r in res["tables"]["outbound"]] == [8, 9, 10]
 
 def test_hourly_first():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "转人工量", "接通量"]
     rows = [
         ("2026-07-27 09:05", 10, 9),
@@ -270,7 +279,7 @@ def test_hourly_first():
     assert set(out.keys()) == {9, 10}, out.keys()
     assert out[9]["转人工量"] == 10, out[9]    # 首条 09:05
     assert out[10]["转人工量"] == 25, out[10]  # 首条 10:05
-    assert Q.hourly_first(tempfile.mkdtemp(), "热线", "2026-07-27") == {}
+    assert Q.hourly_first(_tmp(), "热线", "2026-07-27") == {}
 
 def test_inc_d():
     # 方案D：H点 = end[H]-start[H]，start=first[H]，end=first[H+1]或latest[H](当前小时)
@@ -284,7 +293,7 @@ def test_inc_d():
     assert Q._inc_d({9: 40, 11: 130}, {9: 40, 11: 130}, [9, 10, 11])[10] is None
 
 def test_forecast_12378_first():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "转人工量", "接通量"]
     rows = [
         ("2026-07-20 09:05", 10, 9),
@@ -296,10 +305,10 @@ def test_forecast_12378_first():
     fc = Q.forecast_12378_first(d, "2026-07-27")
     assert fc[9] == 10, fc
     assert fc[10] == 25, fc
-    assert Q.forecast_12378_first(tempfile.mkdtemp(), "2026-07-27") == {}
+    assert Q.forecast_12378_first(_tmp(), "2026-07-27") == {}
 
 def test_build_month():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed(d, "热线", ["时间","转人工量","接通量","排队量","累计呼入量","外呼量","外呼接通量"], [
         ("2026-07-01 21:00", 100, 95, 0, 200, 0, 0),
         ("2026-07-02 21:00", 200, 190, 0, 400, 0, 0),
@@ -332,7 +341,7 @@ def test_build_month():
     assert 1 in res["inbound"]["热线"]["days"] and 2 in res["inbound"]["热线"]["days"]
 
 def test_latest_data_date():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     cols = ["时间", "转人工量"]
     _seed(d, "热线", cols, [
         ("2026-07-27 09:05", 10),
@@ -344,11 +353,11 @@ def test_latest_data_date():
     assert Q.latest_data_date(d) == "2026-07-28"
     # 空目录 -> 今天(YYYY-MM-DD)
     import datetime as _dt
-    assert Q.latest_data_date(tempfile.mkdtemp()) == _dt.date.today().strftime("%Y-%m-%d")
+    assert Q.latest_data_date(_tmp()) == _dt.date.today().strftime("%Y-%m-%d")
 
 def test_card_detail_lag():
     """明细库(工单明细/会话记录)滞后 WS 一个 tick 时，卡片仍应读明细库自身最新小时，而非全局 cur。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     # WS 源热线有 11 点数据 -> cur=11；明细库只到 10 点 -> gd_cur/hl_cur=10
     _seed(d, "热线", ["时间","转人工量","接通量","排队量","累计呼入量","外呼量","外呼接通量"],
           [("2026-07-27 11:05", 0, 0, 0, 0, 0, 0)])
@@ -374,7 +383,7 @@ def test_card_detail_lag():
 
 def test_forecast_cum_up_to():
     """时段预测量按实际数据时间取已到达的15分钟累计，而非当前小时:45未来值。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_csv(d, [
         ("2026-07-29 09:15", "热线", "164", "164"),
         ("2026-07-29 09:30", "热线", "170", "334"),
@@ -406,7 +415,7 @@ def test_card_forecast_15min():
     ]
     cols = ["时间","转人工量","接通量","排队量","累计呼入量","外呼量","外呼接通量"]
     # WS 最新=10:20 -> 时段预测量=10:15累计805(旧逻辑会取10:45的1111)
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed(d, "热线", cols, [("2026-07-29 10:20", 590, 590, 0, 0, 0, 0)])
     _seed_csv(d, csv_rows)
     res = Q.build_day("2026-07-29", d)
@@ -416,7 +425,7 @@ def test_card_forecast_15min():
     assert g["预测量"] == 1111, g          # 全天总量不变
     assert g["流入率"] == "73.29%", g       # 590/805
     # WS 最新=10:48 -> 时段预测量=10:45累计1111
-    d2 = tempfile.mkdtemp()
+    d2 = _tmp()
     _seed(d2, "热线", cols, [("2026-07-29 10:48", 590, 590, 0, 0, 0, 0)])
     _seed_csv(d2, csv_rows)
     g2 = Q.build_day("2026-07-29", d2)["card"]["inbound"]["groups"]["热线"]
@@ -438,6 +447,7 @@ def main():
     test_card_detail_lag()
     test_build_month()
     test_latest_data_date()
+    shutil.rmtree(_WS_TMP, ignore_errors=True)
     print("dashboard_queries OK")
 
 if __name__ == "__main__":

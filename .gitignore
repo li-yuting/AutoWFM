@@ -45,3 +45,4 @@ Thumbs.db
 .workbuddy/
 reasonix.toml
 面试准备.md
+tests/.test_tmp/
