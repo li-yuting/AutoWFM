@@ -449,8 +449,6 @@ class ManagerUI:
 
         self.schedule_var = tk.StringVar(value=schedule_text(cfg, dt.datetime.now()))
         self.autostart_var = tk.StringVar(value=self._autostart_label())
-        self._forecast_date = ""  # 已跑过预测的日期 YYYY-MM-DD，防重复
-        self._forecast_running = False  # 去重锁
         self._backfill_running = False  # 数据补全去重锁
         self._build_ui()
         self._build_tray()
@@ -576,7 +574,6 @@ class ManagerUI:
                         log.info(ev["msg"])
             self._update_status()
             self._load_logs()
-            self._check_forecast(now)
         except Exception:
             log.exception("监控循环异常")
         self.root.after(MONITOR_INTERVAL_MS, self._refresh)
@@ -633,28 +630,6 @@ class ManagerUI:
             return path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)[-max_lines:]
         except Exception as exc:
             return [f"读取日志失败: {exc}\n"]
-
-    # ---- 次日预测量差异对比(21:05 自动触发,不依赖采集器进程)----
-    def _check_forecast(self, now: dt.datetime) -> None:
-        """每天 21:05 后跑一次 check_next_day_diff，不与采集器进程绑定。"""
-        today = now.strftime("%Y-%m-%d")
-        if self._forecast_date == today or self._forecast_running:
-            return
-        if now.hour < 21 or (now.hour == 21 and now.minute < 5):
-            return
-        self._forecast_running = True
-        threading.Thread(target=self._run_forecast_diff, args=(today,), daemon=True, name="forecast-diff").start()
-
-    def _run_forecast_diff(self, today: str) -> None:
-        try:
-            from collector.forecast import check_next_day_diff
-            check_next_day_diff(self.cfg)
-            log.info("[forecast-diff] 次日预测量差异对比完成 (%s)", today)
-        except Exception:
-            log.exception("[forecast-diff] 次日预测量差异对比异常")
-        finally:
-            self._forecast_date = today
-            self._forecast_running = False
 
     # ---- 告警弹窗(置顶)----
     def _show_alert(self, title: str, message: str) -> None:
@@ -762,14 +737,11 @@ class ManagerUI:
             messagebox.showerror("开机自启", f"切换失败:\n{exc}")
         self.autostart_var.set(self._autostart_label())
 
-    # ---- 进线量预测(手动触发;定时 21:05 差异对比由本管理器自动跑,见 _check_forecast)----
+    # ---- 进线量预测(手动触发;定时 09:30 由 Windows 计划任务自动跑)----
     def _build_forecast_page(self, page: tk.Frame) -> None:
         top = tk.Frame(page, padx=10, pady=8)
         top.pack(fill=tk.X)
-        tk.Label(top, text="预测未来天数:").pack(side=tk.LEFT)
-        self.forecast_days_var = tk.StringVar(value="7")
-        tk.Spinbox(top, from_=1, to=30, width=5, textvariable=self.forecast_days_var).pack(side=tk.LEFT, padx=6)
-        self.btn_forecast = tk.Button(top, text="运行预测", width=10, command=self._run_forecast)
+        self.btn_forecast = tk.Button(top, text="运行预测(30天)", width=14, command=self._run_forecast)
         self.btn_forecast.pack(side=tk.LEFT, padx=6)
         self.forecast_status_var = tk.StringVar(value="就绪")
         tk.Label(top, textvariable=self.forecast_status_var, fg="#555555").pack(side=tk.LEFT, padx=10)
@@ -777,9 +749,9 @@ class ManagerUI:
         self.forecast_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
         self.forecast_box.configure(state=tk.DISABLED)
         self._set_forecast_text(
-            "输入天数后点「运行预测」(默认 7 天)。预测基于 data/热线.db、在线.db 每日 21:00 累计转人工量,\n"
-            "需有足够历史(建议 ≥7 天)。每天 21:05 管理器自动跑次日预测量差异对比(超 10% 发企微告警)。\n"
-            "此处为手动触发全量预测,结果同时写入 output/进线量预测_YYYYMMDD.csv。")
+            "点「运行预测(30天)」从 AutoTableau 同步最新数据并预测未来 30 天。\n"
+            "每天 09:30 Windows 计划任务自动运行。\n"
+            "输出: output/YYYY-MM-DD/预测_YYYYMMDD_未来30天.xlsx + .html")
 
     def _set_forecast_text(self, text: str) -> None:
         self.forecast_box.configure(state=tk.NORMAL)
@@ -791,25 +763,15 @@ class ManagerUI:
         self.forecast_status_var.set(s)
 
     def _run_forecast(self) -> None:
-        try:
-            days = int(self.forecast_days_var.get())
-        except ValueError:
-            self._set_forecast_status("天数需为整数"); return
-        except Exception as exc:
-            log.exception("启动预测失败")
-            self._set_forecast_status(f"启动失败: {exc}")
-            return
-        if not (1 <= days <= 30):
-            self._set_forecast_status("天数应在 1-30"); return
         self._set_forecast_status("运行中...")
-        self._set_forecast_text("正在预测,请稍候...")
+        self._set_forecast_text("正在同步数据并预测，请稍候...")
         self.btn_forecast.configure(state=tk.DISABLED)
 
         def worker():
             try:
-                from collector import forecast
-                out, out_path = forecast.run_forecast(days=days, write_csv=True)
-                summary = self._forecast_summary(out, out_path)
+                from peakflow.main import run_forecast
+                out_path = run_forecast(fetch=True)
+                summary = self._forecast_summary(out_path)
                 self.root.after(0, self._on_forecast_done, summary, None)
             except Exception as exc:
                 log.exception("手动预测失败")
@@ -823,30 +785,26 @@ class ManagerUI:
             self._set_forecast_status("失败")
             self._set_forecast_text(
                 f"预测失败: {err}\n\n常见原因:\n"
-                "- data/热线.db / 在线.db 缺少每日 21:00 的累计转人工量历史\n"
-                "- 历史不足导致回归拟合失败\n请查看 logs/manager.log")
+                "- AutoTableau 下载目录无最新数据\n"
+                "- data/ 缺少 CSV 文件\n"
+                "- 历史数据不足（需 ≥28 天）\n请查看 logs/manager.log")
         else:
             self._set_forecast_status("完成")
             self._set_forecast_text(summary)
 
     @staticmethod
-    def _forecast_summary(out, out_path) -> str:
-        """把预测 DataFrame 格式化为文本摘要(各业务合计/日均/超界日期 + CSV 路径)。"""
-        import pandas as pd
-        lines = []
-        for business in ["热线", "在线"]:
-            sub = out[out["业务"] == business]
-            if sub.empty:
-                lines.append(f"{business}: 无预测数据"); continue
-            n = len(sub)
-            total = int(sub["预测转人工量"].sum())
-            avg = round(total / n) if n else 0
-            out_dates = sub[sub["超界标记"] == "是"]["预测日期"]
-            ds = ", ".join(pd.Timestamp(d).strftime("%m-%d") for d in out_dates) or "无"
-            lines.append(f"{business}: {n}天合计 {total}  日均 {avg}")
-            lines.append(f"  超界日期: {ds}")
-        if out_path:
-            lines.append(f"CSV: {out_path}")
+    def _forecast_summary(out_path) -> str:
+        """展示 Excel 路径和基本信息。"""
+        from pathlib import Path
+        path = Path(out_path)
+        lines = [
+            f"预测完成！",
+            f"Excel: {path}",
+            f"HTML:  {path.with_suffix('.html')}",
+            "",
+            "用 Excel 打开查看总览/分类型明细/回测误差/运行说明。",
+            "用浏览器打开 HTML 查看可视化图表。",
+        ]
         return "\n".join(lines)
 
     # ---- 数据补全(手动触发,5 分钟颗粒度回填)----
