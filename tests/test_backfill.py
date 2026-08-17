@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
-import sys, os
+import sys, os, shutil, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import tempfile
 from collector import backfill, storage
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 工作区内临时目录：避免沙箱对系统 temp / mkdtemp 的写入限制（同 test_peakflow_main.py）
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
+
+def _tmp():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    d = os.path.join(_WS_TMP, f"t{os.getpid()}_{time.time_ns()}")
+    os.makedirs(d)
+    return d
 
 def test_iter_days():
     assert backfill.iter_days("2026-07-15", "2026-07-15") == ["2026-07-15"]
@@ -12,7 +20,7 @@ def test_iter_days():
     assert backfill.iter_days("2026-07-31", "2026-08-02") == ["2026-07-31", "2026-08-01", "2026-08-02"]
 
 def test_day_ops():
-    d = tempfile.mkdtemp()
+    d = _tmp()
     storage.insert("工单明细", {"时间": "2026-07-15 09:00", "二线客诉处理组": 0,
         "常规工单处理组": 0, "回访组一组": 0, "贷后回访组": 0, "12378回访组": 0,
         "转接一组": 1, "转接二组": 0, "贷后转接组": 0}, d)
@@ -95,7 +103,7 @@ def test_build_snapshots_exclude_groups():
 def test_backfill_source():
     import yaml, pandas as pd
     cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml"), encoding="utf-8"))
-    d = tempfile.mkdtemp()
+    d = _tmp()
     backfill.SLEEP = 0
     fake = pd.DataFrame({"创建日期": ["2026-07-15 09:02:00"], "接收组": ["转接一组"]})
     backfill.download_day = lambda mcfg, secrets, day, timeout=60: fake
@@ -141,6 +149,7 @@ def main():
     test_build_snapshots_exclude_groups()
     test_build_snapshots_cutoff()
     test_backfill_source()
+    shutil.rmtree(_WS_TMP, ignore_errors=True)
     print("backfill OK")
 
 if __name__ == "__main__":

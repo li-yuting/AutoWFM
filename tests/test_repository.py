@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 """Repository 抽象层测试:验证 SQLiteRepository/SQLiteReadOnlyRepository 读写一致性。"""
-import sys, os, tempfile
+import sys, os, shutil, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collector.repository import SQLiteRepository, SQLiteReadOnlyRepository, SCHEMAS
+
+# 工作区内临时目录：避免沙箱对系统 temp / mkdtemp 的写入限制（同 test_peakflow_main.py）
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
+
+def _tmp():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    d = os.path.join(_WS_TMP, f"t{os.getpid()}_{time.time_ns()}")
+    os.makedirs(d)
+    return d
 
 
 def test_write_then_read():
     """SQLiteRepository.insert 写入后,SQLiteReadOnlyRepository.rows_in 能读到。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     w = SQLiteRepository(d)
     r = SQLiteReadOnlyRepository(d)
     vals = {"时间": "2026-07-27 09:05", "转人工量": 10, "接通量": 9,
@@ -23,7 +32,7 @@ def test_write_then_read():
 
 def test_read_empty():
     """无表/无数据返回 ([], [])。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     r = SQLiteReadOnlyRepository(d)
     rows, cols = r.rows_in("热线", "2026-07-27")
     assert rows == [] and cols == [], (rows, cols)
@@ -33,7 +42,7 @@ def test_read_empty():
 def test_latest_date():
     """latest_date 取热线/在线最新日期;无数据回落今天。"""
     import datetime
-    d = tempfile.mkdtemp()
+    d = _tmp()
     w = SQLiteRepository(d)
     r = SQLiteReadOnlyRepository(d)
     # 无数据 -> 今天
@@ -48,7 +57,7 @@ def test_latest_date():
 
 def test_ensure_index_idempotent():
     """ensure_index 幂等,多次调用不报错。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     w = SQLiteRepository(d)
     w.ensure_index("热线", d)
     w.ensure_index("热线", d)  # 重复调用不报错
@@ -61,7 +70,7 @@ def test_ensure_index_idempotent():
 
 def test_month_prefix():
     """rows_in 用月前缀(YYYY-MM)能取整月。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     w = SQLiteRepository(d)
     w.insert("热线", {"时间": "2026-07-01 09:05", "转人工量": 1, "接通量": 1,
                        "排队量": 0, "累计呼入量": 1, "外呼量": 0, "外呼接通量": 0}, d)
@@ -87,6 +96,7 @@ def main():
     test_ensure_index_idempotent()
     test_month_prefix()
     test_schemas_consistent()
+    shutil.rmtree(_WS_TMP, ignore_errors=True)
     print("repository OK")
 
 

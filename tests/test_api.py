@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
 """API 服务层测试:验证 FastAPI 端点 + Bearer Token 认证。"""
-import sys, os, tempfile, sqlite3
+import sys, os, sqlite3, shutil, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pathlib import Path
+
+# 工作区内临时目录：避免沙箱对系统 temp / mkdtemp 的写入限制（同 test_peakflow_main.py）
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
+
+def _tmp():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    d = os.path.join(_WS_TMP, f"t{os.getpid()}_{time.time_ns()}")
+    os.makedirs(d)
+    return d
 
 
 def _seed(d, source, cols, rows):
@@ -36,7 +45,7 @@ def _client_with_data(d, token=""):
 
 def test_health_no_auth():
     """/health 免认证,始终 200。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     client, _ = _client_with_data(d, token="secret123")
     r = client.get("/health")
     assert r.status_code == 200, r.text
@@ -45,7 +54,7 @@ def test_health_no_auth():
 
 def test_no_token_401():
     """启用 token 时:无 token -> 401。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_minimal(d)
     client, _ = _client_with_data(d, token="secret123")
     r = client.get("/api/latest-date")
@@ -54,7 +63,7 @@ def test_no_token_401():
 
 def test_wrong_token_401():
     """错误 token -> 401。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_minimal(d)
     client, _ = _client_with_data(d, token="secret123")
     r = client.get("/api/latest-date",
@@ -64,7 +73,7 @@ def test_wrong_token_401():
 
 def test_correct_token_200():
     """正确 token -> 200,返回 latest-date。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_minimal(d)
     client, _ = _client_with_data(d, token="secret123")
     r = client.get("/api/latest-date",
@@ -75,7 +84,7 @@ def test_correct_token_200():
 
 def test_day_endpoint():
     """/api/day 返回 build_day 结构(含 card/inbound/outbound/tables)。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_minimal(d)
     client, _ = _client_with_data(d, token="secret123")
     r = client.get("/api/day?date=2026-07-27",
@@ -89,7 +98,7 @@ def test_day_endpoint():
 
 def test_month_endpoint():
     """/api/month 返回 build_month 结构。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_minimal(d)
     client, _ = _client_with_data(d, token="secret123")
     r = client.get("/api/month?date=2026-07",
@@ -101,7 +110,7 @@ def test_month_endpoint():
 
 def test_no_auth_when_token_empty():
     """token 留空时不启用认证,直接 200。"""
-    d = tempfile.mkdtemp()
+    d = _tmp()
     _seed_minimal(d)
     client, _ = _client_with_data(d, token="")
     r = client.get("/api/latest-date")
@@ -119,6 +128,7 @@ def main():
     # 清理环境变量
     os.environ.pop("AUTOWFM_DATA_DIR", None)
     os.environ.pop("AUTOWFM_DASH_TOKEN", None)
+    shutil.rmtree(_WS_TMP, ignore_errors=True)
     print("api OK")
 
 
