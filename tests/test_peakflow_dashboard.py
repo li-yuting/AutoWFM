@@ -12,7 +12,7 @@ from peakflow import dashboard
 from peakflow.forecast import three_band_forecast
 from tests.helpers import make_history
 
-_WS_TMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".test_tmp")
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
 
 
 def test_render_dashboard_embeds_forecast_data():

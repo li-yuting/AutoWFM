@@ -787,7 +787,7 @@ class ManagerUI:
                 f"预测失败: {err}\n\n常见原因:\n"
                 "- AutoTableau 下载目录无最新数据\n"
                 "- data/ 缺少 CSV 文件\n"
-                "- 历史数据不足（需 ≥28 天）\n请查看 logs/manager.log")
+                "- 历史数据不足（<21 天会直接失败；建议 ≥28 天）\n请查看 logs/manager.log")
         else:
             self._set_forecast_status("完成")
             self._set_forecast_text(summary)

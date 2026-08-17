@@ -8,7 +8,7 @@ from pathlib import Path
 from peakflow import config, fetch
 
 # Use workspace-local temp to avoid sandbox restrictions on system temp
-_WS_TMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".test_tmp")
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
 
 
 def _make_autotableau(tmp_dir, date_str=None):

@@ -45,4 +45,5 @@ Thumbs.db
 .workbuddy/
 reasonix.toml
 面试准备.md
+.test_tmp/
 tests/.test_tmp/

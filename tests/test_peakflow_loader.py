@@ -9,7 +9,7 @@ import pandas as pd
 from peakflow import loader
 
 # Use workspace-local temp to avoid sandbox restrictions on system temp
-_WS_TMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".test_tmp")
+_WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")
 
 
 def _write_csv(tmp_dir: str, content: str):
