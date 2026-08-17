@@ -51,8 +51,35 @@ def test_run_forecast_produces_excel():
     print("PASS test_run_forecast_produces_excel")
 
 
+def test_main_cli_returns_zero():
+    """验证 main() CLI 入口: 无参数时返回 0 (fetch=False, 不触发 AutoTableau 同步)。"""
+    os.makedirs(_WS_TMP, exist_ok=True)
+    try:
+        data_dir = Path(_WS_TMP) / "data_cli"
+        data_dir.mkdir()
+        _make_test_data(data_dir)
+
+        old_data_dir = config.DATA_DIR
+        old_out_dir = config.OUTPUT_DIR
+        config.DATA_DIR = data_dir
+        config.OUTPUT_DIR = Path(_WS_TMP) / "out_cli"
+        try:
+            rc = main_mod.main([])
+            assert rc == 0, f"main([]) 应返回 0, 实际 {rc}"
+            # main() CLI 用默认 OUTPUT_DIR, 断言产物落在测试临时目录而非真实 output/
+            cli_out = Path(_WS_TMP) / "out_cli" / dt.date.today().isoformat()
+            assert any(cli_out.glob("预测_*_未来30天.xlsx")), "CLI 应生成 Excel 到测试临时目录"
+        finally:
+            config.DATA_DIR = old_data_dir
+            config.OUTPUT_DIR = old_out_dir
+    finally:
+        shutil.rmtree(_WS_TMP, ignore_errors=True)
+    print("PASS test_main_cli_returns_zero")
+
+
 def main():
     test_run_forecast_produces_excel()
+    test_main_cli_returns_zero()
     print("\nAll tests passed!")
 
 
