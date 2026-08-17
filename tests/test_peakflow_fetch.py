@@ -5,7 +5,7 @@ import datetime as dt
 import shutil
 from pathlib import Path
 
-from peakflow import fetch
+from peakflow import config, fetch
 
 # Use workspace-local temp to avoid sandbox restrictions on system temp
 _WS_TMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".test_tmp")
@@ -66,7 +66,7 @@ def test_sync_missing_file_raises():
 def test_sync_too_old_raises():
     os.makedirs(_WS_TMP, exist_ok=True)
     try:
-        old = (dt.date.today() - dt.timedelta(days=10)).isoformat()
+        old = (dt.date.today() - dt.timedelta(days=config.FETCH_MAX_AGE_DAYS + 1)).isoformat()
         root = _make_autotableau(_WS_TMP, old)
         try:
             fetch.sync_from_autotableau(root, Path(_WS_TMP) / "data")
