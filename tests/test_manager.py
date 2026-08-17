@@ -60,18 +60,11 @@ def test_schedule_text():
 
 
 def test_forecast_summary():
-    import pandas as pd
-    dates = pd.date_range("2026-07-30", periods=3, freq="D")  # 07-30, 07-31, 08-01
-    rows = []
-    for d in dates:
-        rows.append({"预测日期": d, "业务": "热线", "预测转人工量": 1000, "超界标记": "是" if d.day == 31 else "否"})
-        rows.append({"预测日期": d, "业务": "在线", "预测转人工量": 500, "超界标记": "否"})
-    out = pd.DataFrame(rows)
-    s = ManagerUI._forecast_summary(out, "output/x.csv")
-    assert "热线: 3天合计 3000  日均 1000" in s, s
-    assert "超界日期: 07-31" in s, s
-    assert "在线: 3天合计 1500  日均 500" in s, s
-    assert "CSV: output/x.csv" in s, s
+    # Path 归一化输出（Windows 为反斜杠、Linux 为正斜杠），断言与实现一致、跨平台
+    out = Path("output/x.xlsx")
+    s = ManagerUI._forecast_summary(str(out))
+    assert f"Excel: {out}" in s, s
+    assert f"HTML:  {out.with_suffix('.html')}" in s, s
     print("forecast_summary OK")
 
 
