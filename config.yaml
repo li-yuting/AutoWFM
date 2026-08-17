@@ -1,0 +1,101 @@
+endpoints:
+  online: "ws://monitor-datawarehouse-cloud.weicai.com.cn:7100/im/monitor"
+  other:  "ws://monitor-datawarehouse-cloud.weicai.com.cn:7000/customer/monitor"
+schedule:
+  interval_minutes: 5
+  window_start: "09:00"
+  window_end: "21:04"
+  timezone: "Asia/Shanghai"
+ws:
+  connect_timeout: 12
+  recv_timeout: 8
+  retry: 1
+  retry_backoff_base: 2   # 重试间隔=2^attempt 秒的基础值(0=不等待)
+  gap_alert_threshold: 5   # 连续 5 周期(约25分钟)某源无数据/异常 -> 日志告警一次
+  backfill_retry_delay: 5  # 单周期内失败源补采前的等待秒数
+detail:
+  timeout: 60
+secrets:
+  token: ""              # 明文已迁移到 .env(AUTOWFM_TOKEN);config.yaml 不再入库密钥
+  tenementId: ""         # AUTOWFM_TENEMENT_ID
+storage:
+  dir: "data"
+  backend: "sqlite"   # 存储后端:sqlite(默认) | postgresql(将来);Repository 模式按此切换实现
+logging:
+  path: "logs/autowfm.log"
+
+notify:
+  screenshot_url: "http://127.0.0.1:8080/"   # 改8080后换这里;用 127.0.0.1 避免 localhost IPv6 回退延迟
+  push_minutes: [0, 15, 30, 45]
+  push_wait_timeout: 30   # push_job 等待 ws/detail 当周期完成的最长秒数,超时退化为上一周期数据
+  webhook:
+    main_key: ""           # AUTOWFM_WEBHOOK_MAIN（一线 + 截图）
+    secondary_key: ""      # AUTOWFM_WEBHOOK_SECONDARY（二线 + 截图）
+  dash_token: ""           # 看板 Bearer Token(AUTOWFM_DASH_TOKEN);留空则看板无认证(本地开发)
+  alert:
+    hotline_queue: 10
+    online_queue: 20
+    queue_12378: 1
+    gap_recipient: ["17629050914"]   # 采集缺口告警 @ 人(走 main_key)
+    recipients:
+      hotline: ["17629050914", "18829270926"]
+      online: ["17629050914", "18821657478"]
+      "12378": ["17629050914", "18629552489", "15091009979"]
+
+forecast:
+  # 输出
+  output_dir: "output"
+  # 取数
+  auto_tableau_dir: "D:/PythonProject/AutoTableau"
+  fetch_files: ["在线各类用户.csv", "热线各类用户.csv"]
+  fetch_max_age_days: 2
+  # 模型参数
+  horizon: 30
+  min_history: 28
+  trend_fit_days: 14
+  ratio_window: 14
+  backtest_window: 14
+  sigma_k: 1.0
+  trend_damp: 0.0
+
+seat_data: &seat_data
+  skillCode: ""
+
+subs:
+  - {name: "热线",      endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: HFQ_OFFICIAL}}
+  - {name: "12378",     endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: SERVICE_12378}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
+  - {name: "热线明细",   endpoint: other,  screen: SEAT,       skill: "252", data: {<<: *seat_data, skillCode: "252"}}
+  - {name: "常规",      endpoint: other,  screen: SEAT,       skill: "520", data: {<<: *seat_data, skillCode: "520"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 73746}}}
+  - {name: "贷后",      endpoint: other,  screen: SEAT,       skill: "958", data: {<<: *seat_data, skillCode: "958"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 82997}}}
+  - {name: "12378明细",  endpoint: other,  screen: SEAT,       skill: "847", data: {<<: *seat_data, skillCode: "847", agentStatusDeptId: "q40YvMUfzHi1y3aOr89s8lx3mTk55OluQVhDCmYH"}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
+  - {name: "在线",      endpoint: online, screen: IM_MONITOR, data: {skillCode: "73745", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: "73745"}}
+
+detail_modes:
+  会话记录:
+    url: "https://callcenter-crm.weicai.com.cn/api/sheet/callLog/exportCL"
+    date_fields: {start: staStartDt, end: endStartDt}
+    date_format: "%Y-%m-%d %H:%M:%S"
+    filter:
+      channel_column: "渠道来源"
+      channels: ["电话呼入呼入", "在线客服呼入呼入"]
+      group_column: "处理组别"
+      groups: ["转接一组", "转接二组", "贷后转接组", "回访组一组", "贷后回访组"]
+    data:
+      columns: "startDt"
+      orders: "DESC"
+      fromTypeId: "TEL,ZXKF,QT"
+      isDesensitization: true
+      exports: "cusCode,cusName,serviceTypeName,itemName,threeTypeName,startDt,remark,cusNum,crtName,crtDeptName,serviceLabelNameList,blackFlagName,busiTypeName,startTime,endTime,callDuration,fromTypeName,disconnectName,isSheet,code,dnis,id,endReasonName,staName,complaintName,appeaseName"
+  工单明细:
+    url: "https://callcenter-crm.weicai.com.cn/api/sheet/list/exportCLSheet"
+    date_fields: {start: startCrtDt, end: endCrtDt}
+    date_format: "%Y-%m-%d"
+    filter:
+      group_column: "接收组"
+      groups: ["二线客诉处理组", "常规工单处理组", "回访组一组", "贷后回访组", "12378回访组", "转接一组", "转接二组", "贷后转接组"]
+      row_exclude:
+        eq_columns: ["建立坐席", "接收坐席"]
+        exclude_groups: ["回访组一组", "贷后回访组", "12378回访组", "转接一组", "转接二组", "贷后转接组"]
+    data:
+      isDesensitization: true
+      exports: "sheetNo,busCodeName,allTime,lastOperateTime,ext3,ext2,cusId,cusName,allocateStatus,statusName,sheetTypeName,busTypeName,threeTypeName,crtName,recOrgName,recName,uLevleName,serviceLabelNameList,blackFlagName,sourceName,sceneSecondTypeName,sceneThirdTypeName,complaintName,appeaseName"
