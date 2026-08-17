@@ -17,3 +17,14 @@ def test_horizon():
 def test_paths():
     assert config.DATA_DIR.name == "data"
     assert config.OUTPUT_DIR.name == "output"
+
+
+def main():
+    test_client_types_expected()
+    test_horizon()
+    test_paths()
+    print("test_peakflow_config OK")
+
+
+if __name__ == "__main__":
+    main()
