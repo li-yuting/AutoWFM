@@ -99,3 +99,52 @@ detail_modes:
     data:
       isDesensitization: true
       exports: "sheetNo,busCodeName,allTime,lastOperateTime,ext3,ext2,cusId,cusName,allocateStatus,statusName,sheetTypeName,busTypeName,threeTypeName,crtName,recOrgName,recName,uLevleName,serviceLabelNameList,blackFlagName,sourceName,sceneSecondTypeName,sceneThirdTypeName,complaintName,appeaseName"
+# ============ 接待上限批量修改(member_limit) ============
+# 腾讯云联络中心成员接待上限批量修改工具。
+# 凭据(账号/密码)放 .env 的 AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD，不入库。
+member_limit:
+  url: "https://desk.qcloud.com/"
+  limit: 3              # 手动执行输入框的默认值(实际以 UI 输入框为准)
+  headless: true        # 无头运行;排障可临时改 false(可见窗口)
+  members:
+    - "雷博"
+    - "蒙静"
+    - "米欣"
+    - "段雪楠"
+    - "赵敏"
+    - "丁花娟"
+    - "石凯"
+    - "贾世涛"
+    - "杨晖"
+    - "史立"
+    - "王玲霞"
+    - "魏倩倩"
+    - "孟坤"
+    - "孟令坤"
+    - "曾小玲"
+    - "杨国蓉"
+    - "杨少晨"
+    - "魏卓怡"
+    - "张慧颖"
+    - "方珍"
+    - "王园"
+    - "王璇"
+    - "田科科"
+    - "段旭"
+    - "魏锋"
+    - "贺周"
+    - "赵佩瑶"
+    - "荀飞扬"
+    - "候磊"
+    - "黎家齐"
+    - "杨诺菲"
+    - "朱启佳"
+    - "王廷仪"
+    - "蔡勋"
+    - "张圣莹"
+    - "王静逸"
+    - "何泽名"
+    - "陈逸飞"
+    - "吴嘉瑜"
+    - "林耀俊"
+    - "房吴颉"

@@ -49,3 +49,5 @@ reasonix.toml
 面试准备.md
 .test_tmp/
 tests/.test_tmp/
+# ---- 接待上限批量修改 ----
+member_limit/chrome_profile/

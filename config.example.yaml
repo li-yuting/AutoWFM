@@ -109,3 +109,11 @@ detail_modes:
     data:
       isDesensitization: true
       exports: ""
+# ============ 接待上限批量修改(member_limit) ============
+# 腾讯云联络中心成员接待上限批量修改工具。
+# 凭据(账号/密码)由 .env 的 AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD 提供。
+member_limit:
+  url: "https://desk.qcloud.com/"
+  limit: 3              # 手动执行输入框的默认值(实际以 UI 输入框为准)
+  headless: true        # 无头运行;排障可临时改 false(可见窗口)
+  members: []           # 待调整的成员昵称列表(成员页第一列，需完全一致)
