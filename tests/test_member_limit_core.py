@@ -2,7 +2,8 @@
 """member_limit 纯逻辑测试（不依赖浏览器）：plain assert，直接运行。"""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from member_limit.core import classify_member, build_summary, format_summary
+from member_limit.core import (classify_member, classify_edit_result,
+                                   build_summary, format_summary)
 
 
 def test_classify_member():
@@ -10,6 +11,18 @@ def test_classify_member():
     assert classify_member(" 3 ", 3) == "already"
     assert classify_member("4", 3) == "change"
     assert classify_member("", 3) == "change"
+
+
+def test_classify_edit_result():
+    # 核心回归:headless 下 dialog 计数可能永不归零(ok=False),但回读值已更新 -> 必须判成功
+    assert classify_edit_result(False, "3", 3) == "success"
+    assert classify_edit_result(False, " 3 ", 3) == "success"
+    assert classify_edit_result(True, "3", 3) == "success"
+    assert classify_edit_result(True, "2", 3) == "unverified"
+    assert classify_edit_result(False, "2", 3) == "failed"
+    assert classify_edit_result(False, None, 3) == "failed"   # 回读找不到 -> 非成功
+    assert classify_edit_result(True, None, 3) == "unverified"
+    print("classify_edit_result OK")
 
 
 def test_build_summary():
@@ -39,6 +52,7 @@ def test_format_summary_dry_run():
 
 def main():
     test_classify_member()
+    test_classify_edit_result()
     test_build_summary()
     test_format_summary_cancelled()
     test_format_summary_dry_run()

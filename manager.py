@@ -1076,9 +1076,8 @@ class ManagerUI:
                 if st["status"].get() == "执行中":
                     st["status"].set("已失败")
             return
-        from member_limit.core import format_summary
         self._set_member_limit_status("完成")
-        self._append_member_limit_text("\n" + format_summary(summary))
+        # 汇总已在 core.run_member_limit 经 progress_cb 输出,这里不再重复打印
         for st in self._ml_sched:
             if st["status"].get() == "执行中":
                 st["status"].set("已执行")

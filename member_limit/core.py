@@ -20,6 +20,18 @@ def classify_member(cur, target: int) -> str:
     return "already" if str(cur).strip() == str(target) else "change"
 
 
+def classify_edit_result(ok: bool, new_cur, target: int) -> str:
+    """按修改后回读值 + 对话框关闭状态判定结果(权威判据是回读值):
+
+    'success'   : 回读值已更新为目标(无论对话框计数是否成立,headless 下 dialog 计数不可靠)
+    'unverified': 对话框关闭但回读值未变
+    'failed'    : 对话框未关且回读值未变
+    """
+    if new_cur is not None and str(new_cur).strip() == str(target):
+        return "success"
+    return "unverified" if ok else "failed"
+
+
 def build_summary(changed, already, unverified, failed, not_found,
                   cancelled: bool, dry_run: bool) -> dict:
     return {
@@ -151,7 +163,9 @@ def _set_limit(page, limit: int) -> bool:
     limit_input.fill(str(limit))
     page.wait_for_timeout(300)
     dlg.get_by_role("button", name="完成").click()
-    for _ in range(30):
+    # 轮询较短(3s):dialog 计数在 headless 下可能永不归零,只作 unverified/failed 的次要判据;
+    # 真正成败由 run_member_limit 按修改后回读值判定,避免每个成员白等 15s
+    for _ in range(6):
         page.wait_for_timeout(500)
         if page.locator("[role=dialog]").count() == 0:
             return True
@@ -217,14 +231,15 @@ def run_member_limit(config: dict, progress_cb=None, should_cancel=None,
                         ok = _edit_row(page, idx, limit)
                         page.wait_for_timeout(3000)
                         _, _, new_cur = _find_pending_row(page, {name})
-                        if ok and new_cur == str(limit):
+                        result = classify_edit_result(ok, new_cur, limit)
+                        if result == "success":
                             _say(progress_cb, f"  [修改成功] {name}：{cur} -> {limit}（已校验）")
                             changed.append((name, cur, limit))
-                        elif ok:
+                        elif result == "unverified":
                             _say(progress_cb, f"  [提交未校验] {name} 提交成功但自动校验未通过，当前显示 {new_cur!r}")
                             unverified.append(name)
                         else:
-                            _say(progress_cb, f"  [修改失败] {name} 弹窗未正常关闭，可能未生效")
+                            _say(progress_cb, f"  [修改失败] {name} 对话框未关闭且回读值未更新，可能未生效")
                             failed.append(name)
                     if should_cancel and should_cancel():
                         cancelled = True
