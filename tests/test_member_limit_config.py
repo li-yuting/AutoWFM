@@ -49,8 +49,10 @@ def test_load_ok():
 
 def test_load_missing_credentials():
     with _tmp() as td:
-        os.environ.pop("AUTOWFM_QCLOUD_ACCOUNT", None)
-        os.environ.pop("AUTOWFM_QCLOUD_PASSWORD", None)
+        # 置空而非 pop:load_dotenv(override=False) 不覆盖已存在的变量,
+        # 即使向上查找到项目根真实 .env 也注入不进凭据
+        os.environ["AUTOWFM_QCLOUD_ACCOUNT"] = ""
+        os.environ["AUTOWFM_QCLOUD_PASSWORD"] = ""
         p = td / "config.yaml"
         p.write_text("member_limit:\n  members: ['甲']\n", encoding="utf-8")
         try:
