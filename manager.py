@@ -39,6 +39,7 @@ DASHBOARD_LOG = LOG_DIR / "dashboard.log"
 API_LOG = LOG_DIR / "api.log"
 MANAGER_LOG = LOG_DIR / "manager.log"
 SHIFT_LOG = LOG_DIR / "shift.log"
+MEMBER_LIMIT_LOG = LOG_DIR / "member_limit.log"
 
 MONITOR_INTERVAL_MS = 5000
 GRACE_SECONDS = 30          # 启动后存活不足此秒数即退出 -> 计为一次失败重启
@@ -150,6 +151,30 @@ def _pid_alive(pid: int) -> bool:
         return False
     except (PermissionError, OSError):
         return True
+
+
+def parse_schedule(s: str):
+    """HH:MM → 当日分钟(0..1439)；非法/越界返回 None。"""
+    try:
+        h, m = s.split(":")
+        h, m = int(h), int(m)
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h * 60 + m
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
+def schedule_action(enabled: bool, now_mins: int, sched_mins, fired: bool) -> str:
+    """单次预约状态机：'wait'（等待到点）| 'run'（到点触发）|
+    'expired'（时间已过，跳过）| 'idle'（未启用/已触发/时间非法）。"""
+    if not enabled or fired or sched_mins is None:
+        return "idle"
+    if now_mins > sched_mins:
+        return "expired"
+    if now_mins == sched_mins:
+        return "run"
+    return "wait"
 
 
 # ── 受管任务 ────────────────────────────────────────────────────────
@@ -450,6 +475,9 @@ class ManagerUI:
         self.schedule_var = tk.StringVar(value=schedule_text(cfg, dt.datetime.now()))
         self.autostart_var = tk.StringVar(value=self._autostart_label())
         self._backfill_running = False  # 数据补全去重锁
+        self._ml_running = False   # 接待上限执行去重锁
+        self._ml_cancel = False    # 逐人中断标记
+        self._ml_sched = []        # 两个预约行状态(在 _build_member_limit_page 填充)
         self._build_ui()
         self._build_tray()
         self._refresh()
@@ -519,6 +547,10 @@ class ManagerUI:
         bf_page.grid(row=0, column=0, sticky="nsew")
         self._build_backfill_page(bf_page)
         nav_items.append(("数据补全", bf_page))
+        ml_page = tk.Frame(content)
+        ml_page.grid(row=0, column=0, sticky="nsew")
+        self._build_member_limit_page(ml_page)
+        nav_items.append(("接待上限", ml_page))
 
         self._nav_pages = [page for _, page in nav_items]
         self._nav_buttons = []
@@ -565,6 +597,7 @@ class ManagerUI:
         try:
             now = dt.datetime.now().astimezone()  # aware,与 started_at 对齐,避免 now-started_at 时区不一致抛 TypeError
             self.schedule_var.set(schedule_text(self.cfg, now))
+            self._check_member_limit_schedules(now)
             in_win = in_run_window(self.cfg, now)
             for task in self.tasks:
                 for ev in task.tick(in_win, now):
@@ -903,6 +936,178 @@ class ManagerUI:
         else:
             self._set_backfill_status("完成")
             self._append_backfill_text("\n=== 汇总 ===\n" + summary)
+
+    # ---- 接待上限批量修改 ----
+    def _build_member_limit_page(self, page: tk.Frame) -> None:
+        top = tk.Frame(page, padx=10, pady=8)
+        top.pack(fill=tk.X)
+        tk.Label(top, text="上限值:").pack(side=tk.LEFT)
+        ml_cfg = self.cfg.get("member_limit") or {}
+        self.ml_limit_var = tk.StringVar(value=str(ml_cfg.get("limit", 3)))
+        tk.Entry(top, width=6, textvariable=self.ml_limit_var).pack(side=tk.LEFT, padx=4)
+        members = ml_cfg.get("members") or []
+        tk.Label(top, text=f"成员: {len(members)} 人").pack(side=tk.LEFT, padx=8)
+        self.btn_ml_start = tk.Button(top, text="开始执行", width=10, command=self._manual_member_limit)
+        self.btn_ml_start.pack(side=tk.LEFT, padx=6)
+        self.btn_ml_stop = tk.Button(top, text="停止", width=8,
+                                     command=self._stop_member_limit, state=tk.DISABLED)
+        self.btn_ml_stop.pack(side=tk.LEFT, padx=6)
+        self.ml_status_var = tk.StringVar(value="就绪")
+        tk.Label(top, textvariable=self.ml_status_var, fg="#555555").pack(side=tk.LEFT, padx=10)
+
+        sched = tk.Frame(page, padx=10, pady=4)
+        sched.pack(fill=tk.X)
+        tk.Label(sched, text="预约运行:", font=("Microsoft YaHei UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        self._ml_sched = []
+        for k in (1, 2):
+            st = {
+                "enabled": tk.BooleanVar(value=False),
+                "time": tk.StringVar(value=""),
+                "limit": tk.StringVar(value=""),
+                "status": tk.StringVar(value="等待预约"),
+                "fired": False,
+            }
+            self._ml_sched.append(st)
+            row = tk.Frame(sched)
+            row.pack(side=tk.LEFT, padx=(0, 18))
+            tk.Checkbutton(row, text=f"预约{k}", variable=st["enabled"]).pack(side=tk.LEFT)
+            tk.Entry(row, width=7, textvariable=st["time"]).pack(side=tk.LEFT, padx=3)
+            tk.Label(row, text="上限").pack(side=tk.LEFT)
+            tk.Entry(row, width=4, textvariable=st["limit"]).pack(side=tk.LEFT, padx=3)
+            tk.Label(row, textvariable=st["status"], fg="#555555").pack(side=tk.LEFT, padx=4)
+
+        self.ml_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
+        self.ml_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
+        self.ml_box.configure(state=tk.DISABLED)
+        self._set_member_limit_text(
+            "手动执行：填上限值后点「开始执行」；运行中可点「停止」逐人中断。\n"
+            "预约执行：勾选启用 + 填 HH:MM 时间与上限值，到点自动执行一次后清除。\n"
+            "日志同时写入 logs/member_limit.log。")
+
+    def _set_member_limit_text(self, text: str) -> None:
+        self.ml_box.configure(state=tk.NORMAL)
+        self.ml_box.delete("1.0", tk.END)
+        self.ml_box.insert(tk.END, text)
+        self.ml_box.configure(state=tk.DISABLED)
+
+    def _append_member_limit_text(self, text: str) -> None:
+        self.ml_box.configure(state=tk.NORMAL)
+        self.ml_box.insert(tk.END, text + "\n")
+        self.ml_box.see(tk.END)
+        self.ml_box.configure(state=tk.DISABLED)
+        try:
+            with open(MEMBER_LIMIT_LOG, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        except Exception:
+            pass
+
+    def _set_member_limit_status(self, s: str) -> None:
+        self.ml_status_var.set(s)
+
+    def _manual_member_limit(self) -> None:
+        try:
+            limit = int(self.ml_limit_var.get().strip())
+        except ValueError:
+            self._set_member_limit_status("上限需为数字")
+            return
+        self._run_member_limit(limit, "手动执行")
+
+    def _run_member_limit(self, limit: int, label: str) -> bool:
+        """启动一次执行；返回是否真正启动（False=已有执行/参数无效，供调度层标记跳过）。"""
+        if self._ml_running:
+            self._append_member_limit_text(f"[{label}] 已有执行在跑，本次触发跳过")
+            return False
+        if limit <= 0:
+            self._set_member_limit_status("上限无效")
+            self._append_member_limit_text(f"[{label}] 上限需为正整数")
+            return False
+        members = (self.cfg.get("member_limit") or {}).get("members") or []
+        if not members:
+            self._set_member_limit_status("名单为空")
+            self._append_member_limit_text("config.yaml 的 member_limit.members 为空，请先配置")
+            return False
+        self._ml_running = True
+        self._ml_cancel = False
+        self.btn_ml_start.configure(state=tk.DISABLED)
+        self.btn_ml_stop.configure(state=tk.NORMAL)
+        self._set_member_limit_status("运行中...")
+        self._set_member_limit_text(f"[{label}] 开始，目标上限 = {limit}，成员 {len(members)} 人")
+
+        def worker():
+            try:
+                from member_limit.config import ConfigError, load as ml_load
+                from member_limit.core import run_member_limit
+                cfg = ml_load()
+                cfg["limit"] = limit
+                summary = run_member_limit(
+                    cfg,
+                    progress_cb=self._on_member_limit_progress,
+                    should_cancel=lambda: self._ml_cancel,
+                )
+                self.root.after(0, self._on_member_limit_done, summary, None, label)
+            except ConfigError as exc:
+                self.root.after(0, self._on_member_limit_done, "", exc, label)
+            except Exception as exc:
+                log.exception("接待上限执行失败")
+                self.root.after(0, self._on_member_limit_done, "", exc, label)
+
+        threading.Thread(target=worker, daemon=True, name="member_limit").start()
+        return True
+
+    def _stop_member_limit(self) -> None:
+        self._ml_cancel = True
+        self._set_member_limit_status("停止中...")
+        self._append_member_limit_text(">> 已请求停止（当前成员完成后退出）")
+        self.btn_ml_stop.configure(state=tk.DISABLED)
+
+    def _on_member_limit_progress(self, text: str) -> None:
+        self.root.after(0, self._append_member_limit_text, text)
+
+    def _on_member_limit_done(self, summary, err, label: str) -> None:
+        self._ml_running = False
+        self.btn_ml_start.configure(state=tk.NORMAL)
+        self.btn_ml_stop.configure(state=tk.DISABLED)
+        if err is not None:
+            self._set_member_limit_status("失败")
+            self._append_member_limit_text(f"\n[{label}] 执行失败: {err}")
+            for st in self._ml_sched:
+                if st["status"].get() == "执行中":
+                    st["status"].set("已失败")
+            return
+        from member_limit.core import format_summary
+        self._set_member_limit_status("完成")
+        self._append_member_limit_text("\n" + format_summary(summary))
+        for st in self._ml_sched:
+            if st["status"].get() == "执行中":
+                st["status"].set("已执行")
+
+    def _check_member_limit_schedules(self, now: dt.datetime) -> None:
+        """每次 _refresh 调用：按状态机处理两个预约行（wait/run/expired）。"""
+        now_mins = now.hour * 60 + now.minute
+        for st in self._ml_sched:
+            sched_mins = parse_schedule(st["time"].get().strip())
+            action = schedule_action(st["enabled"].get(), now_mins, sched_mins, st["fired"])
+            if action == "wait":
+                continue
+            st["enabled"].set(False)
+            if action == "expired":
+                st["status"].set("已过期")
+                self._append_member_limit_text(f"[预约 {st['time'].get()}] 时间已过，跳过本次")
+            elif action == "run":
+                st["fired"] = True
+                st["status"].set("执行中")
+                try:
+                    limit = int(st["limit"].get().strip() or 0)
+                except ValueError:
+                    limit = 0
+                if limit <= 0:
+                    st["status"].set("已取消(上限无效)")
+                    self._append_member_limit_text(f"[预约 {st['time'].get()}] 上限无效，已取消本次")
+                    continue
+                self._append_member_limit_text(f"[预约 {st['time'].get()}] 到点自动执行，上限={limit}")
+                started = self._run_member_limit(limit, f"预约 {st['time'].get()}")
+                if not started:
+                    st["status"].set("已跳过")
 
     # ---- 重启控制台(拉新进程、不停子进程,新窗口自动接管)----
     def _restart_manager(self) -> None:

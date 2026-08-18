@@ -7,7 +7,8 @@ import tkinter as tk
 from unittest.mock import patch, MagicMock
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from manager import compute_auto_start, auto_stop_minutes, in_run_window, schedule_text, ManagerUI, ManagedTask, GRACE_SECONDS
+from manager import (compute_auto_start, auto_stop_minutes, in_run_window, schedule_text,
+                       ManagerUI, ManagedTask, GRACE_SECONDS, parse_schedule, schedule_action)
 
 SH = ZoneInfo("Asia/Shanghai")
 
@@ -57,6 +58,28 @@ def test_schedule_text():
     assert "每日计划" in s and "工作日" in s and "08:30" in s and "21:00" in s, s
     s2 = schedule_text(_cfg(), dt.datetime(2026, 8, 1, 12, 0, tzinfo=SH))
     assert "每日计划" in s2 and "周末" in s2 and "09:00" in s2, s2
+
+
+def test_parse_schedule():
+    assert parse_schedule("18:00") == 18 * 60
+    assert parse_schedule("09:30") == 9 * 60 + 30
+    assert parse_schedule("00:00") == 0
+    assert parse_schedule("") is None
+    assert parse_schedule("abc") is None
+    assert parse_schedule("25:00") is None
+    assert parse_schedule("12:60") is None
+    print("parse_schedule OK")
+
+
+def test_schedule_action():
+    t = 18 * 60
+    assert schedule_action(False, t, t, False) == "idle"          # 未启用
+    assert schedule_action(True, t - 30, t, False) == "wait"      # 未到点
+    assert schedule_action(True, t, t, False) == "run"            # 到点触发
+    assert schedule_action(True, t + 30, t, False) == "expired"   # 时间已过
+    assert schedule_action(True, t, t, True) == "idle"            # 已触发过
+    assert schedule_action(True, t, None, False) == "idle"        # 时间非法
+    print("schedule_action OK")
 
 
 def test_forecast_summary():
@@ -256,8 +279,8 @@ def test_ui_constructs():
         root.withdraw()
         ui = ManagerUI(root, _cfg())
         try:
-            assert len(ui._nav_buttons) == 6, f"6 个导航按钮, 实际 {len(ui._nav_buttons)}"
-            assert len(ui._nav_pages) == 6, f"6 个内容页, 实际 {len(ui._nav_pages)}"
+            assert len(ui._nav_buttons) == 7, f"7 个导航按钮, 实际 {len(ui._nav_buttons)}"
+            assert len(ui._nav_pages) == 7, f"7 个内容页, 实际 {len(ui._nav_pages)}"
             assert len(ui._log_boxes) == 4, f"4 个日志框, 实际 {len(ui._log_boxes)}"
         finally:
             root.destroy()
@@ -289,6 +312,8 @@ def main():
     test_in_run_window_weekday()
     test_in_run_window_weekend()
     test_schedule_text()
+    test_parse_schedule()
+    test_schedule_action()
     test_forecast_summary()
     test_tick_auto_start()
     test_tick_auto_stop()

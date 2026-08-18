@@ -10,6 +10,7 @@
 | 看板 | `python -m dashboard.app` | 只读 Flask 网页（:8080），经 `api_client.py` 调 FastAPI 渲染 9 个库；API 不可用时降级直连 `queries.py` |
 | API | `python -m api.app` | FastAPI 只读层（:8081），看板与第三方的统一数据出口 |
 | 排班 | `manager.py` 监管 | `shift/` Flask 子项目：排班计划导入、校验、生成 |
+| 接待上限 | `member_limit/` | headless 批量改腾讯云联络中心成员接待上限，manager.py「接待上限」页手动/预约执行 |
 | 管理器 | `python manager.py` | Tkinter 桌面监管器：自动启停/崩溃重启采集器/API/看板/排班，含进线量预测页（调用 peakflow）、数据补全页 |
 | 周度预估转换 | `writeforecast/` | 周度预估 Excel → `data/预估流入量.csv` |
 

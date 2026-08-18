@@ -6,6 +6,7 @@
 - `dashboard/` — read-only Flask viewer (:8080) over `data/*.db` and `data/预估流入量.csv`; data via `api_client.py` (FastAPI).
 - `api/` — FastAPI read layer (:8081); dashboard falls back to `dashboard/queries.py` when the API is down.
 - `shift/` — scheduling subproject (Flask app `shift/app.py`), supervised by `manager.py`.
+- `member_limit/` — 腾讯云联络中心成员接待上限批量修改（headless Playwright），manager.py「接待上限」页调用；凭据在 `.env`（AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD），名单在 config.yaml。
 - `writeforecast/` — standalone weekly-forecast-to-CSV converter.
 - `manager.py` — optional Tkinter supervisor for the collector, API, dashboard, and shift processes.
 - `tests/` — plain-`assert` test scripts (`test_*.py`) plus a live `smoke.py`.
