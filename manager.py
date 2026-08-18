@@ -957,7 +957,7 @@ class ManagerUI:
 
         sched = tk.Frame(page, padx=10, pady=4)
         sched.pack(fill=tk.X)
-        tk.Label(sched, text="预约运行:", font=("Microsoft YaHei UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(sched, text="预约运行:", font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
         self._ml_sched = []
         for k in (1, 2):
             st = {
@@ -969,8 +969,9 @@ class ManagerUI:
             }
             self._ml_sched.append(st)
             row = tk.Frame(sched)
-            row.pack(side=tk.LEFT, padx=(0, 18))
+            row.pack(fill=tk.X, pady=2, anchor="w")
             tk.Checkbutton(row, text=f"预约{k}", variable=st["enabled"]).pack(side=tk.LEFT)
+            tk.Label(row, text="预约时间").pack(side=tk.LEFT, padx=(4, 2))
             tk.Entry(row, width=7, textvariable=st["time"]).pack(side=tk.LEFT, padx=3)
             tk.Label(row, text="上限").pack(side=tk.LEFT)
             tk.Entry(row, width=4, textvariable=st["limit"]).pack(side=tk.LEFT, padx=3)
