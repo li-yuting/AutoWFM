@@ -190,7 +190,7 @@ def take_screenshot(url, dash_token=None):
                 if dash_token:
                     pg.set_extra_http_headers({"Authorization": f"Bearer {dash_token}"})
                 pg.goto(url, wait_until="networkidle", timeout=30000)
-                pg.wait_for_timeout(4000)   # 等 Chart.js 渲染(本看板无 updateTime 标记)
+                pg.wait_for_timeout(5000)   # 等 Chart.js 渲染(本看板无 updateTime 标记)
                 pg.screenshot(path=path, full_page=True)
                 log.info(f"截图已保存: {path}")
                 return path
