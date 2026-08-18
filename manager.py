@@ -553,6 +553,11 @@ class ManagerUI:
         nav_items.append(("接待上限", ml_page))
 
         self._nav_pages = [page for _, page in nav_items]
+        # 三个工具按钮:导航列底部(接待上限下方空白),从下往上摆;
+        # 先 pack(side=BOTTOM) 保证底部优先级最高,窗口变矮时裁剪的是导航项而非这三个按钮
+        tk.Button(nav, text="刷新日志", command=self._load_logs).pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=(0, 2))
+        tk.Button(nav, textvariable=self.autostart_var, command=self._toggle_autostart).pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=2)
+        tk.Button(nav, text="重启控制台", command=self._restart_manager).pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=(2, 6))
         self._nav_buttons = []
         for idx, (label, _page) in enumerate(nav_items):
             btn = tk.Button(nav, text=label, relief=tk.RAISED,
@@ -563,13 +568,8 @@ class ManagerUI:
         ttk.Separator(self.root).pack(fill=tk.X, padx=12)
 
         bar = tk.Frame(self.root, padx=12, pady=6)
-        # 锚定底部:窗口高度不足时由 main(expand) 吸收压缩,底部三按钮永不被裁剪
+        # 三个工具按钮已移至「采集器日志」页底部;此处仅保留管理器日志路径标签
         bar.pack(side=tk.BOTTOM, fill=tk.X)
-        tk.Button(bar, text="刷新日志", command=self._load_logs).pack(side=tk.LEFT)
-        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
-        tk.Button(bar, textvariable=self.autostart_var, command=self._toggle_autostart).pack(side=tk.LEFT)
-        tk.Button(bar, text="重启控制台", command=self._restart_manager).pack(side=tk.LEFT, padx=8)
-        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         tk.Label(bar, text=f"管理器日志: {MANAGER_LOG}", fg="#777777").pack(side=tk.RIGHT)
 
     def _show_page(self, idx: int) -> None:
