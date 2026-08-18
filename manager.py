@@ -563,7 +563,8 @@ class ManagerUI:
         ttk.Separator(self.root).pack(fill=tk.X, padx=12)
 
         bar = tk.Frame(self.root, padx=12, pady=6)
-        bar.pack(fill=tk.X)
+        # 锚定底部:窗口高度不足时由 main(expand) 吸收压缩,底部三按钮永不被裁剪
+        bar.pack(side=tk.BOTTOM, fill=tk.X)
         tk.Button(bar, text="刷新日志", command=self._load_logs).pack(side=tk.LEFT)
         ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         tk.Button(bar, textvariable=self.autostart_var, command=self._toggle_autostart).pack(side=tk.LEFT)
