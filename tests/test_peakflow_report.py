@@ -62,9 +62,34 @@ def test_report_has_totals_in_detail():
     print("PASS test_report_has_totals_in_detail")
 
 
+def test_write_client_type_csv():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    try:
+        df, sig = _sample()
+        out = Path(_WS_TMP) / "client_types.csv"
+        from peakflow.report import write_client_type_csv
+        write_client_type_csv(df, df, out)
+        assert out.exists()
+        import csv
+        with open(out, encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        assert len(rows) == 2 * 8 * 10, f"预期 160 行，实际 {len(rows)}"
+        assert rows[0].keys() == {"日期", "客户类型", "渠道", "预估进线量", "预估转人工量"}
+        chs = {r["渠道"] for r in rows}
+        assert chs == {"在线", "热线"}
+        for r in rows:
+            assert int(r["预估进线量"]) >= 0
+            assert int(r["预估转人工量"]) >= 0
+    finally:
+        shutil.rmtree(_WS_TMP, ignore_errors=True)
+    print("PASS test_write_client_type_csv")
+
+
 def main():
     test_write_report()
     test_report_has_totals_in_detail()
+    test_write_client_type_csv()
     print("\nAll tests passed!")
 
 

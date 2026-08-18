@@ -41,6 +41,11 @@ def test_run_forecast_produces_excel():
             assert Path(out).exists()
             assert Path(out).suffix == ".xlsx"
             assert Path(out).parent.name == dt.date.today().isoformat()
+            csv = Path(out).parent / f"预测_{dt.date.today():%Y%m%d}_未来30天_分类型.csv"
+            assert csv.exists()
+            with open(csv, encoding="utf-8-sig") as f:
+                header = f.readline()
+            assert "日期,客户类型,渠道,预估进线量,预估转人工量" in header
             html = Path(out).with_suffix(".html")
             assert html.exists()
             assert "var FD =" in html.read_text(encoding="utf-8")
@@ -69,6 +74,7 @@ def test_main_cli_returns_zero():
             # main() CLI 用默认 OUTPUT_DIR, 断言产物落在测试临时目录而非真实 output/
             cli_out = Path(_WS_TMP) / "out_cli" / dt.date.today().isoformat()
             assert any(cli_out.glob("预测_*_未来30天.xlsx")), "CLI 应生成 Excel 到测试临时目录"
+            assert any(cli_out.glob("预测_*_未来30天_分类型.csv")), "CLI 应生成分类型 CSV 到测试临时目录"
         finally:
             config.DATA_DIR = old_data_dir
             config.OUTPUT_DIR = old_out_dir

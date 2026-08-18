@@ -52,6 +52,9 @@ def run_forecast(fetch: bool = False, out_dir: Path | None = None) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"预测_{dt.date.today():%Y%m%d}_未来{config.HORIZON}天.xlsx"
     report.write_report(results["在线"], results["热线"], sigmas, meta, out_path)
+    csv_path = out_dir / f"预测_{dt.date.today():%Y%m%d}_未来{config.HORIZON}天_分类型.csv"
+    report.write_client_type_csv(results["在线"], results["热线"], csv_path)
+    print("分类型CSV:", csv_path)
     dashboard_path = out_path.with_suffix(".html")
     dashboard.write_dashboard(
         dashboard.build_dashboard_data(histories, results, meta), dashboard_path
