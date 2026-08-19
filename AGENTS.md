@@ -7,7 +7,7 @@
 - `api/` — FastAPI read layer (:8081); dashboard falls back to `dashboard/queries.py` when the API is down.
 - `shift/` — scheduling subproject (Flask app `shift/app.py`), supervised by `manager.py`.
 - `member_limit/` — 腾讯云联络中心成员接待上限批量修改（headless Playwright），manager.py「接待上限」页调用；凭据在 `.env`（AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD），名单在 config.yaml。
-- `writeforecast/` — standalone weekly-forecast-to-CSV converter.
+- `writeforecast/` — two independent scripts, not a package: `writeforecast.py` (周度预估 Excel → `data/预估流入量.csv`) and `时段人力数架构准备_v2.py` (班表 Excel → 按日期/小时展开的时段人力架构表)。
 - `manager.py` — optional Tkinter supervisor for the collector, API, dashboard, and shift processes.
 - `tests/` — plain-`assert` test scripts (`test_*.py`) plus a live `smoke.py`.
 - Root config: `config.yaml`, `.env` (secrets, git-ignored), `holidays.txt`.
@@ -28,7 +28,7 @@ $env:PYTHONIOENCODING="utf-8"
 
 Run all tests (no pytest): `Get-ChildItem tests\test_*.py | ForEach-Object { .\.venv\Scripts\python.exe $_.FullName }`.
 
-Use `-m` for `collector`/`dashboard`/`api` so the project root stays on `sys.path`.
+Use `-m` for `collector`/`dashboard`/`api` so the project root stays on `sys.path`. Exception: `shift/` and `writeforecast/` use flat imports (`from reader import ...`), so they must be run directly (script dir on `sys.path`), **not** with `-m`. `manager.py` launches `shift/app.py` by injecting `shift/` into `sys.path` then `runpy.run_path(...)` (see `manager.py` `_SHIFT_PRE_RUN`).
 
 ## Coding Style & Naming Conventions
 

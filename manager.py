@@ -567,11 +567,6 @@ class ManagerUI:
         self._show_page(0)
         ttk.Separator(self.root).pack(fill=tk.X, padx=12)
 
-        bar = tk.Frame(self.root, padx=12, pady=6)
-        # 三个工具按钮已移至「采集器日志」页底部;此处仅保留管理器日志路径标签
-        bar.pack(side=tk.BOTTOM, fill=tk.X)
-        tk.Label(bar, text=f"管理器日志: {MANAGER_LOG}", fg="#777777").pack(side=tk.RIGHT)
-
     def _show_page(self, idx: int) -> None:
         """切换左侧导航到第 idx 个内容页(raise_ 叠放帧 + 高亮选中按钮)。"""
         self._nav_pages[idx].tkraise()

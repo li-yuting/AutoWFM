@@ -5,6 +5,24 @@ import warnings
 import requests
 import pandas as pd
 
+def _match_group(value, groups):
+    """把导出的组值按「包含」折叠到配置的规范组。
+    同时命中多个组时取最长者；长度相同取匹配位置最靠前者（如 '贷后回访组一组'
+    同时含 '贷后回访组'(pos 0) 与 '回访组一组'(pos 3) → '贷后回访组'）。
+    无匹配返回 None；精确值必然命中（包含是精确的超集）。"""
+    text = "" if value is None else str(value)
+    has_ld = "贷后" in text
+    best, best_len, best_pos = None, -1, -1
+    for g in groups:
+        if "贷后" in g and not has_ld:
+            continue  # 业务规则：值不含「贷后」二字，不得命中贷后策略组
+        pos = text.find(g)
+        if pos < 0:
+            continue
+        if len(g) > best_len or (len(g) == best_len and pos < best_pos):
+            best, best_len, best_pos = g, len(g), pos
+    return best
+
 def _apply_row_exclude(d, fcfg):
     """行级排除：filter.row_exclude.eq_columns 列出的两列值相等则剔除该行。
     可选 exclude_groups：仅对这些组应用排除（其余组保留全部行）。
@@ -23,18 +41,24 @@ def _apply_row_exclude(d, fcfg):
     if exc_groups:
         gc = fcfg.get("group_column")
         if gc and gc in d.columns:
-            # 仅对 exclude_groups 内的组排除等值行，其余组全保留
-            return d[~(eq_mask & d[gc].isin(exc_groups))]
+            # 仅对 exclude_groups 内的组排除等值行，其余组全保留；
+            # 前缀折叠后判断是否属于 exclude_groups，保证与 count_groups 同口径
+            in_scope = d[gc].map(lambda v: _match_group(v, exc_groups)).notna()
+            return d[~(eq_mask & in_scope)]
     return d[~eq_mask]
 
 def count_groups(df, fcfg):
+    gc = fcfg["group_column"]
+    groups = fcfg["groups"]
     d = df
     if fcfg.get("channel_column"):
         d = d[d[fcfg["channel_column"]].isin(fcfg["channels"])]
-    d = d[d[fcfg["group_column"]].isin(fcfg["groups"])]
+    d = d.copy()                                   # 避免 SettingWithCopyWarning / 别名污染调用方
+    d[gc] = d[gc].map(lambda v: _match_group(v, groups))  # '回访组一组-25' → '回访组一组'，无匹配 → None
+    d = d[d[gc].notna()]                           # 丢弃非成员（替代原 .isin 过滤）
     d = _apply_row_exclude(d, fcfg)
-    cnt = d.groupby(fcfg["group_column"]).size().to_dict()
-    return {g: int(cnt.get(g, 0)) for g in fcfg["groups"]}
+    cnt = d.groupby(gc).size().to_dict()
+    return {g: int(cnt.get(g, 0)) for g in groups}
 
 class EmptyDownloadError(Exception):
     """下载的 Excel 无有效数据行(空表),避免覆盖真实数据。"""

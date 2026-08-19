@@ -100,6 +100,19 @@ def test_build_snapshots_exclude_groups():
     assert rows[1]["转接一组"] == 1, rows[1]   # 09:05 cum = 09:02
     assert rows[3]["常规工单处理组"] == 1, rows[3]  # 09:12 保留
 
+def test_build_snapshots_suffix():
+    import pandas as pd
+    df = pd.DataFrame({
+        "创建日期": ["2026-07-15 09:02:00", "2026-07-15 09:12:00"],
+        "接收组": ["回访组一组-25", "回访组一组"],   # 带后缀值前缀折叠到回访组一组
+    })
+    fcfg = {"group_column": "接收组", "groups": ["回访组一组", "转接二组"]}
+    rows, total = backfill.build_snapshots(df, "2026-07-15", fcfg, ["回访组一组", "转接二组"],
+                                           "创建日期", "%Y-%m-%d %H:%M:%S", "09:00", "21:04")
+    assert total == {"回访组一组": 2, "转接二组": 0}, total   # 与实时 count_groups 同口径
+    assert rows[3]["回访组一组"] == 2, rows[3]               # <09:15 = 09:02+09:12
+    assert rows[-1]["回访组一组"] == 2, rows[-1]
+
 def test_backfill_source():
     import yaml, pandas as pd
     cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml"), encoding="utf-8"))
@@ -147,6 +160,7 @@ def main():
     test_build_snapshots_channel()
     test_build_snapshots_row_exclude()
     test_build_snapshots_exclude_groups()
+    test_build_snapshots_suffix()
     test_build_snapshots_cutoff()
     test_backfill_source()
     shutil.rmtree(_WS_TMP, ignore_errors=True)

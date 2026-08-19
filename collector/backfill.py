@@ -66,13 +66,15 @@ def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end, cu
     cutoff="HH:MM"：仅生成时刻 ≤ cutoff 的刻度，且不追加 23:59 全天总计行
     (用于补全「当天」时，只补过去时段、不写未来数据)。cutoff=None 保持原整天行为。"""
     import pandas as pd
-    from collector.detail import _apply_row_exclude
+    from collector.detail import _apply_row_exclude, _match_group
     d = df
     if fcfg.get("channel_column"):
         d = d[d[fcfg["channel_column"]].isin(fcfg["channels"])]
-    d = d[d[fcfg["group_column"]].isin(groups)]
-    d = _apply_row_exclude(d, fcfg)  # 与实时 count_groups 同步行级排除口径
     gc = fcfg["group_column"]
+    d = d.copy()
+    d[gc] = d[gc].map(lambda v: _match_group(v, groups))  # 前缀折叠，与实时 count_groups 同口径
+    d = d[d[gc].notna()]
+    d = _apply_row_exclude(d, fcfg)  # 与实时 count_groups 同步行级排除口径
     ts = pd.to_datetime(d[time_col], format=fmt, errors="coerce")
     mods = ts.dt.hour * 60 + ts.dt.minute          # minute_of_day, NaN for 缺失
     slots = mods // 5                                # 0..287, NaN for 缺失

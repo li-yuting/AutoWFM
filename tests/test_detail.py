@@ -72,6 +72,41 @@ def main():
             "group_column":"处理组别","groups":["转接一组","转接二组","贷后转接组"]}
     assert detail.count_groups(df4, fcfg4) == {"转接一组":1,"转接二组":1,"贷后转接组":0}
 
+    # 包含(子串)匹配：带后缀的值归入对应组（用户示例）
+    df6 = pd.DataFrame({"处理组别": ["回访组一组-25", "转接二组-追加", "回访组一组", "贷后回访组"]})
+    f6 = {"group_column": "处理组别",
+          "groups": ["回访组一组", "贷后回访组", "转接二组", "转接一组"]}
+    c6 = detail.count_groups(df6, f6)
+    assert c6 == {"回访组一组": 2, "贷后回访组": 1, "转接二组": 1, "转接一组": 0}, c6
+
+    # 边界：空串 / 短于组名 / 未配置组 / nan 全部丢弃；无「贷后」的值不命中贷后组
+    df7 = pd.DataFrame({"处理组别": ["回访组一组-25", "", "转接", "未配置组-xx", float("nan"), "回访组一组"]})
+    f7 = {"group_column": "处理组别", "groups": ["回访组一组", "转接一组", "贷后回访组"]}
+    c7 = detail.count_groups(df7, f7)
+    assert c7 == {"回访组一组": 2, "转接一组": 0, "贷后回访组": 0}, c7
+
+    # _match_group 单元断言：包含在中间 / 最长优先 / 平局位置靠前 / 贷后守卫 / None
+    gs = ["转接一组", "转接二组", "回访组一组", "贷后回访组"]
+    assert detail._match_group("回访组一组-25", gs) == "回访组一组"
+    assert detail._match_group("转接二组-追加", gs) == "转接二组"
+    assert detail._match_group("XX回访组一组YY", gs) == "回访组一组"
+    assert detail._match_group("贷后回访组一组", gs) == "贷后回访组"      # 平局(5字)，位置0靠前
+    assert detail._match_group("回访组", gs) is None                      # 短于组名
+    assert detail._match_group("", gs) is None
+    assert detail._match_group(None, gs) is None
+
+    # row_exclude + 后缀：回访组一组-25 等值行被排除；常规工单处理组-x 等值行保留
+    df8 = pd.DataFrame({
+        "建立坐席": ["甲","乙","丙","丁"],
+        "接收坐席": ["甲","乙","丙","丁"],   # 全部 建立==接收
+        "接收组":   ["回访组一组-25","常规工单处理组-x","常规工单处理组-y","常规工单处理组-z"],
+    })
+    f8 = {"group_column":"接收组","groups":["回访组一组","常规工单处理组"],
+          "row_exclude":{"eq_columns":["建立坐席","接收坐席"],
+                         "exclude_groups":["回访组一组"]}}
+    c8 = detail.count_groups(df8, f8)
+    assert c8 == {"回访组一组":0, "常规工单处理组":3}, c8
+
     print("detail OK")
 
 if __name__ == "__main__": main()
