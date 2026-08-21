@@ -305,6 +305,39 @@ def test_update_status_sets_dot():
     print("update_status_sets_dot OK")
 
 
+def test_member_limit_schedule_rearm():
+    """预约触发后(fired=True)重新勾选启用,应重置 fired 允许第二次预约;
+    已勾选但时间未填(idle)不应被静默取消勾选。"""
+    with patch.object(ManagerUI, "_build_tray", lambda self: None), \
+         patch.object(ManagerUI, "_refresh", lambda self: None):
+        root = tk.Tk()
+        root.withdraw()
+        ui = ManagerUI(root, _cfg())
+        try:
+            now = dt.datetime(2026, 8, 21, 10, 0)
+            # 场景1: 上次已触发,用户重新勾选 -> 重新武装进入等待
+            st = ui._ml_sched[0]
+            st["enabled"].set(True)
+            st["time"].set("11:00")
+            st["limit"].set("3")
+            st["fired"] = True
+            st["status"].set("已执行")
+            ui._check_member_limit_schedules(now)
+            assert st["fired"] is False, "重新勾选后应重置 fired,允许第二次预约"
+            assert st["status"].get() == "等待预约"
+            assert st["enabled"].get() is True, "等待到点中不应被取消勾选"
+            # 场景2: 勾选了但时间还没填完(idle) -> 不应被静默取消
+            st2 = ui._ml_sched[1]
+            st2["enabled"].set(True)
+            st2["time"].set("")
+            ui._check_member_limit_schedules(now)
+            assert st2["enabled"].get() is True, "时间未填(idle)不应取消勾选"
+            assert st2["fired"] is False
+        finally:
+            root.destroy()
+    print("member_limit_schedule_rearm OK")
+
+
 def main():
     test_auto_start_weekday()
     test_auto_start_weekend()
@@ -328,6 +361,7 @@ def main():
     test_tick_health_check_clears_failures()
     test_ui_constructs()
     test_update_status_sets_dot()
+    test_member_limit_schedule_rearm()
     print("ALL manager tests OK")
 
 

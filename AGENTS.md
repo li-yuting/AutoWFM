@@ -3,6 +3,7 @@
 ## Project Structure & Module Organization
 
 - `collector/` — data collection: WebSocket scraping (`ws.py`), CRM detail export (`detail.py`: 会话记录/工单明细), forecasting, backfill, notifications, scheduler. All writes go through the Repository abstraction in `repository.py` (SQLite today; `config.yaml storage.backend` selects the backend).
+- `peakflow/` - 30-day 进线量预测（趋势 + 周季节分解外推，三档区间）；Windows 计划任务 `AutoWFM_Forecast` 每天 09:30 运行，或 manager.py「进线量预测」页手动触发。输入 AutoTableau 的 UTF-16 TSV，输出 Excel + HTML 到 `output/`；与看板实时预测量（`data/预估流入量.csv`）相互独立。
 - `dashboard/` — read-only Flask viewer (:8080) over `data/*.db` and `data/预估流入量.csv`; data via `api_client.py` (FastAPI).
 - `api/` — FastAPI read layer (:8081); dashboard falls back to `dashboard/queries.py` when the API is down.
 - `shift/` — scheduling subproject (Flask app `shift/app.py`), supervised by `manager.py`.

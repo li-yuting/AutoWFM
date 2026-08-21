@@ -1081,9 +1081,13 @@ class ManagerUI:
         """每次 _refresh 调用：按状态机处理两个预约行（wait/run/expired）。"""
         now_mins = now.hour * 60 + now.minute
         for st in self._ml_sched:
+            if st["enabled"].get() and st["fired"]:
+                # 触发过又重新勾选启用 = 再次预约一次
+                st["fired"] = False
+                st["status"].set("等待预约")
             sched_mins = parse_schedule(st["time"].get().strip())
             action = schedule_action(st["enabled"].get(), now_mins, sched_mins, st["fired"])
-            if action == "wait":
+            if action in ("idle", "wait"):
                 continue
             st["enabled"].set(False)
             if action == "expired":
