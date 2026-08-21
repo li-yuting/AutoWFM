@@ -32,6 +32,7 @@ def validate_schedule(schedule: Schedule, config: SchedulerConfig) -> list[Warni
     warnings.extend(_check_sandwich(schedule))
     warnings.extend(_check_balance(schedule, config))
     warnings.extend(_check_conversion(schedule))
+    warnings.extend(_check_employee_rest_excess(schedule, config))
     _append_summary(warnings)
     schedule.warnings.extend(warnings)
     return warnings
@@ -218,6 +219,35 @@ def _check_conversion(schedule: Schedule) -> list[Warning]:
             Warning("11", "INFO", f"OFF转A3 {off_to_a3:.2f}，A3转OFF {a3_to_off:.2f}")
         ]
     return []
+
+
+def _check_employee_rest_excess(schedule: Schedule, config: SchedulerConfig) -> list[Warning]:
+    warnings = []
+    for employee in schedule.employees:
+        rest_count = sum(
+            1
+            for idx in schedule.active_indexes
+            if employee.schedule[idx].base_shift == REST_SHIFT
+        )
+        if rest_count > config.preset_rest_days:
+            warnings.append(
+                Warning(
+                    "15",
+                    "WARN",
+                    f"休息天数 {rest_count}，超过设定 {config.preset_rest_days} 天",
+                    employee.name,
+                )
+            )
+        elif rest_count < config.preset_rest_days:
+            warnings.append(
+                Warning(
+                    "15",
+                    "WARN",
+                    f"休息天数 {rest_count}，少于设定 {config.preset_rest_days} 天",
+                    employee.name,
+                )
+            )
+    return warnings
 
 
 def _append_summary(warnings: list[Warning]) -> None:

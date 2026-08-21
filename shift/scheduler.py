@@ -39,6 +39,9 @@ def run_scheduler(schedule: Schedule, config: SchedulerConfig) -> Schedule:
     repair_generated_streaks(schedule, config)
     redistribute_rest_excess(schedule, config)
     repair_rest_excess(schedule, config)
+    repair_employee_rest_count(schedule, config)
+    cluster_high_pairs(schedule, config)
+    redistribute_balance(schedule, config)
     return schedule
 
 
@@ -191,57 +194,117 @@ def repair_generated_streaks(schedule: Schedule, config: SchedulerConfig) -> Non
 
 
 def redistribute_rest_excess(schedule: Schedule, config: SchedulerConfig) -> None:
+    all_shifts = set(SHIFT_ORDER) | {REST_SHIFT}
+    actuals: dict[tuple[int, str], float] = {}
+    for idx in schedule.active_indexes:
+        for shift in all_shifts:
+            actuals[(idx, shift)] = _actual(schedule, idx, shift)
+
     changed = True
     attempts = 0
     max_attempts = len(schedule.employees) * max(1, len(schedule.dates))
     while changed and attempts < max_attempts:
-        attempts += 1
         changed = False
-        over_days = _off_over_days(schedule, config)
+        over_days = sorted(
+            (
+                idx
+                for idx in schedule.active_indexes
+                if actuals[(idx, REST_SHIFT)] > schedule.adjusted_demands[idx].get(REST_SHIFT) + config.demand_tolerance
+            ),
+            key=lambda idx: actuals[(idx, REST_SHIFT)] - schedule.adjusted_demands[idx].get(REST_SHIFT),
+            reverse=True,
+        )
         if not over_days:
             return
 
         for over_idx in over_days:
             target = schedule.adjusted_demands[over_idx].get(REST_SHIFT)
-            over_excess = _actual(schedule, over_idx, REST_SHIFT) - target
-            if over_excess <= config.demand_tolerance:
-                continue
-            for employee in _generated_rest_employees(schedule, over_idx):
-                receiver_days = _rest_receiver_days(schedule, over_idx, employee.coefficient)
-                for under_idx in receiver_days:
-                    if _try_swap_rest_to_under_day(schedule, employee, over_idx, under_idx, over_excess, config):
-                        changed = True
-                        break
-                if changed:
+            while attempts < max_attempts:
+                over_excess = actuals[(over_idx, REST_SHIFT)] - target
+                if over_excess <= config.demand_tolerance:
                     break
-            if changed:
-                break
+                swapped = False
+                for employee in _generated_rest_employees(schedule, over_idx):
+                    receiver_days = sorted(
+                        (
+                            idx
+                            for idx in schedule.active_indexes
+                            if idx != over_idx
+                            and actuals[(idx, REST_SHIFT)] - schedule.adjusted_demands[idx].get(REST_SHIFT) + employee.coefficient < over_excess - 0.01
+                        ),
+                        key=lambda idx: actuals[(idx, REST_SHIFT)] - schedule.adjusted_demands[idx].get(REST_SHIFT),
+                    )
+                    for under_idx in receiver_days:
+                        under_cell = employee.schedule[under_idx]
+                        under_shift = under_cell.base_shift
+                        if under_cell.is_locked or under_cell.is_historical or under_shift not in WORK_SHIFTS:
+                            continue
+                        if schedule.adjusted_demands[over_idx].get(under_shift) - actuals[(over_idx, under_shift)] <= config.demand_tolerance:
+                            continue
+                        over_target = schedule.adjusted_demands[over_idx].get(REST_SHIFT)
+                        under_target = schedule.adjusted_demands[under_idx].get(REST_SHIFT)
+                        if actuals[(over_idx, REST_SHIFT)] - employee.coefficient < over_target - config.demand_tolerance:
+                            continue
+                        if actuals[(under_idx, REST_SHIFT)] + employee.coefficient - under_target >= over_excess - 0.01:
+                            continue
+
+                        over_cell = employee.schedule[over_idx]
+                        old_over = over_cell.value
+                        old_under = under_cell.value
+                        over_cell.value = under_shift
+                        under_cell.value = None
+                        swap_ok = False
+                        try:
+                            if _can_assign_rest(schedule, employee, under_idx, config):
+                                under_cell.value = REST_SHIFT
+                                over_cell.value = None
+                                if _can_assign_shift(schedule, employee, over_idx, under_shift, config):
+                                    over_cell.value = old_under
+                                    swap_ok = True
+                        finally:
+                            if not swap_ok:
+                                over_cell.value = old_over
+                                under_cell.value = old_under
+                        if swap_ok:
+                            actuals[(over_idx, REST_SHIFT)] -= employee.coefficient
+                            actuals[(over_idx, under_shift)] += employee.coefficient
+                            actuals[(under_idx, under_shift)] -= employee.coefficient
+                            actuals[(under_idx, REST_SHIFT)] += employee.coefficient
+                            changed = True
+                            swapped = True
+                            attempts += 1
+                            break
+                    if swapped:
+                        break
+                if not swapped:
+                    break
 
 
 def repair_rest_excess(schedule: Schedule, config: SchedulerConfig) -> None:
+    all_shifts = set(SHIFT_ORDER) | {REST_SHIFT}
     for day_index in schedule.active_indexes:
+        day_actuals = {shift: _actual(schedule, day_index, shift) for shift in all_shifts}
         changed = True
         while changed:
             changed = False
             target = schedule.adjusted_demands[day_index].get(REST_SHIFT)
-            actual = _actual(schedule, day_index, REST_SHIFT)
-            if actual <= target + config.demand_tolerance:
+            if day_actuals[REST_SHIFT] <= target + config.demand_tolerance:
                 break
 
             candidates = [
                 employee
                 for employee in schedule.employees
-                if _can_convert_rest_to_work(schedule, employee, day_index, target, config)
+                if _can_convert_rest_to_work(schedule, employee, day_index, target, config, day_actuals)
             ]
             if not candidates:
                 break
 
             best: tuple[float, str, str, Employee] | None = None
             for employee in candidates:
-                shift = _best_underfilled_shift(schedule, employee, day_index, config)
+                shift = _best_underfilled_shift(schedule, employee, day_index, config, day_actuals)
                 if not shift:
                     continue
-                gap = schedule.adjusted_demands[day_index].get(shift) - _actual(schedule, day_index, shift)
+                gap = schedule.adjusted_demands[day_index].get(shift) - day_actuals[shift]
                 option = (gap, shift, employee.name, employee)
                 if best is None or option > best:
                     best = option
@@ -250,7 +313,286 @@ def repair_rest_excess(schedule: Schedule, config: SchedulerConfig) -> None:
                 break
             _, shift, _, employee = best
             _assign(schedule, employee, day_index, shift)
+            day_actuals[REST_SHIFT] -= employee.coefficient
+            day_actuals[shift] += employee.coefficient
             changed = True
+
+
+def repair_employee_rest_count(schedule: Schedule, config: SchedulerConfig) -> None:
+    for employee in schedule.employees:
+        rest_count = _active_count(employee, REST_SHIFT, schedule)
+        target = config.preset_rest_days
+
+        if rest_count > target:
+            excess = rest_count - target
+            candidates = [
+                idx
+                for idx in schedule.active_indexes
+                if employee.schedule[idx].base_shift == REST_SHIFT
+                and not employee.schedule[idx].is_locked
+                and not employee.schedule[idx].is_historical
+            ]
+            candidates.sort(
+                key=lambda idx: (
+                    # 优先从 OFF 超额的日子转出，保护 OFF 已短缺的日子
+                    _actual(schedule, idx, REST_SHIFT)
+                    - schedule.adjusted_demands[idx].get(REST_SHIFT),
+                    schedule.adjusted_demands[idx].get("A3")
+                    - _actual(schedule, idx, "A3"),
+                ),
+                reverse=True,
+            )
+            for idx in candidates:
+                if excess <= 0:
+                    break
+                # 不从 OFF 已短缺(移除后跌破容差)的日子拿走休息，避免加剧当日 OFF 缺口
+                if not _demand_ok_removing(schedule, idx, REST_SHIFT, employee.coefficient, config):
+                    continue
+                if _try_convert_off_to_shift(schedule, employee, idx, config):
+                    excess -= 1
+            if excess > 0:
+                # 第二遍：配额优先 —— 仍超出时从「OFF 缺口最小」的短缺日开始转出，
+                # 最缺的日子(如需求尖峰日)排到最后才碰，把冗余分散而非集中。
+                remaining = [
+                    idx
+                    for idx in schedule.active_indexes
+                    if employee.schedule[idx].base_shift == REST_SHIFT
+                    and not employee.schedule[idx].is_locked
+                    and not employee.schedule[idx].is_historical
+                ]
+                remaining.sort(
+                    key=lambda idx: _actual(schedule, idx, REST_SHIFT)
+                    - schedule.adjusted_demands[idx].get(REST_SHIFT),
+                    reverse=True,
+                )
+                for idx in remaining:
+                    if excess <= 0:
+                        break
+                    if _try_convert_off_to_shift(schedule, employee, idx, config):
+                        excess -= 1
+            if excess > 0:
+                schedule.warnings.append(
+                    Warning(
+                        "15",
+                        "WARN",
+                        f"休息天数仍超出 {excess} 天，无法找到合适位置转为 A3/A2",
+                        employee.name,
+                    )
+                )
+
+        elif rest_count < target:
+            deficit = target - rest_count
+            candidates = [
+                idx
+                for idx in schedule.active_indexes
+                if not employee.schedule[idx].is_locked
+                and not employee.schedule[idx].is_historical
+                and not employee.schedule[idx].is_blank
+                and employee.schedule[idx].base_shift in WORK_SHIFTS
+            ]
+            candidates.sort(
+                key=lambda idx: (
+                    schedule.adjusted_demands[idx].get(REST_SHIFT)
+                    - _actual(schedule, idx, REST_SHIFT),
+                    _shift_priority(employee.schedule[idx].base_shift),
+                ),
+                reverse=True,
+            )
+            for idx in candidates:
+                if deficit <= 0:
+                    break
+                if _try_convert_work_to_rest(schedule, employee, idx, config):
+                    deficit -= 1
+            if deficit > 0:
+                schedule.warnings.append(
+                    Warning(
+                        "15",
+                        "WARN",
+                        f"休息天数仍缺少 {deficit} 天，无法找到合适位置转为 OFF",
+                        employee.name,
+                    )
+                )
+
+
+def cluster_high_pairs(schedule: Schedule, config: SchedulerConfig) -> None:
+    """两次休息之间若有恰好 2 个高强班(D/D1/Z/Z1)且不连续，调成连续并尽量贴前段休息。
+
+    只用「同日交换」：每个工作日的班次多元集合不变。
+    """
+    for employee in schedule.employees:
+        for start, end in _work_blocks_between_rests(employee):
+            highs = [
+                idx
+                for idx in range(start, end + 1)
+                if employee.schedule[idx].base_shift in HIGH_LIMIT_SHIFTS
+            ]
+            if len(highs) != 2 or highs[1] == highs[0] + 1:
+                continue
+            h1, h2 = highs
+            # 目标槽 start、start+1 需可动（非 locked/historical）
+            if not _cells_free(employee, (start, start + 1)):
+                continue
+            # 优先级1：把高强班放到前段休息(OFF)后，即块首 start。
+            # 放宽：允许同一员工行内直接移动（仅需当日相应班次仍在容差内），以真正提升贴 OFF 数。
+            placed = employee.schedule[start].base_shift in HIGH_LIMIT_SHIFTS
+            if not placed:
+                placed = _move_high_in_row(schedule, employee, h2, start, config) or _move_high_in_row(
+                    schedule, employee, h1, start, config
+                )
+            if not placed:
+                continue
+            # 优先级2：把另一个高强班聚到 start+1（贴 OFF 且相邻）
+            for other in (
+                i
+                for i in range(start, end + 1)
+                if i != start and employee.schedule[i].base_shift in HIGH_LIMIT_SHIFTS
+            ):
+                if other != start + 1:
+                    # 也放宽为行内移动，避免跨员工 swap 带来的连带损耗
+                    _move_high_in_row(schedule, employee, other, start + 1, config)
+                break
+
+
+def _cells_free(employee: Employee, indexes: Iterable[int]) -> bool:
+    return all(
+        not employee.schedule[i].is_locked and not employee.schedule[i].is_historical
+        for i in indexes
+    )
+
+
+def _work_blocks_between_rests(employee: Employee) -> list[tuple[int, int]]:
+    """两次休息之间、两端都贴休息的连续工作日块 [s, e]（s-1 与 e+1 均为 OFF）。"""
+    blocks = []
+    n = len(employee.schedule)
+    i = 0
+    while i < n:
+        if employee.schedule[i].base_shift in WORK_SHIFTS:
+            s = i
+            while i < n and employee.schedule[i].base_shift in WORK_SHIFTS:
+                i += 1
+            e = i - 1
+            if s > 0 and e < n - 1 and _is_rest(employee, s - 1) and _is_rest(employee, e + 1):
+                blocks.append((s, e))
+        else:
+            i += 1
+    return blocks
+
+
+def _move_high_in_row(
+    schedule: Schedule, employee: Employee, day_from: int, day_to: int, config: SchedulerConfig
+) -> bool:
+    """同一员工行内把高强从 day_from 移到 day_to(OFF 后)。放宽不变式：允许小幅日计改变，但需在容差内。
+
+    把高强移到 day_to、day_to 的原工作班次挪回 day_from；仅当两个受影响班次的移除都不致跌破需求容差、且双方约束成立时接受。
+    """
+    if day_from == day_to:
+        return False
+    src = employee.schedule[day_from]
+    dst = employee.schedule[day_to]
+    if src.is_locked or src.is_historical or dst.is_locked or dst.is_historical:
+        return False
+    high = src.base_shift
+    x = dst.base_shift
+    if high not in HIGH_LIMIT_SHIFTS or x not in WORK_SHIFTS:
+        return False
+    if not _demand_ok_removing(schedule, day_from, high, employee.coefficient, config):
+        return False
+    if not _demand_ok_removing(schedule, day_to, x, employee.coefficient, config):
+        return False
+    old_src, old_dst = src.value, dst.value
+    src.value = x
+    dst.value = high
+    if _can_hold_shift(schedule, employee, day_from, x, config) and _can_hold_shift(
+        schedule, employee, day_to, high, config
+    ):
+        return True
+    src.value, dst.value = old_src, old_dst
+    return False
+
+
+def _demand_ok_removing(
+    schedule: Schedule, day_index: int, shift: str, coeff: float, config: SchedulerConfig
+) -> bool:
+    """day_index 移除一格 shift 后，该班次实际数是否仍在需求容差内。
+
+    用 2× 标准容差：接受该高强贴 OFF 步骤造成的小幅日波动，但仍阻止无边的拉大缺口。
+    """
+    target = schedule.adjusted_demands[day_index].get(shift)
+    actual = _actual(schedule, day_index, shift)
+    return actual - coeff >= target - 2 * config.demand_tolerance
+
+
+def _can_hold_shift(
+    schedule: Schedule, employee: Employee, day_index: int, shift: str, config: SchedulerConfig
+) -> bool:
+    """校验某格在该位置能否承接 shift（先置空再查 `_can_assign_shift`，适用于重排已排班格）。"""
+    cell = employee.schedule[day_index]
+    value = cell.value
+    cell.value = None
+    try:
+        return _can_assign_shift(schedule, employee, day_index, shift, config)
+    finally:
+        cell.value = value
+
+
+def redistribute_balance(schedule: Schedule, config: SchedulerConfig) -> None:
+    """均匀高强(D/D1/A1)与次高强(Z/Z1/A4)班在合格(非三期)员工间的分布。
+
+    balance_threshold 表示允许的计数差：差 > 阈值才触发再分布。用同系数「同日交换」，每日计数不变。
+    """
+    for group in (HIGH_BALANCE_SHIFTS, SECONDARY_BALANCE_SHIFTS):
+        counts = [_active_count_any(e, group, schedule) for e in schedule.employees]
+        changes = True
+        attempts = 0
+        cap = len(schedule.employees) * max(1, len(schedule.active_indexes))
+        while changes and attempts < cap:
+            changes = False
+            carriers = [i for i in range(len(schedule.employees)) if counts[i] > 0]
+            if not carriers:
+                break
+            over = max(carriers, key=lambda i: counts[i])
+            receivers = [
+                i
+                for i in range(len(schedule.employees))
+                if not schedule.employees[i].is_phase3
+            ]  # 只有非三期能承接这两组班次
+            if not receivers:
+                break
+            under = min(receivers, key=lambda i: counts[i])
+            if counts[over] - counts[under] <= config.balance_threshold:
+                break
+            emp_over = schedule.employees[over]
+            emp_under = schedule.employees[under]
+            if abs(emp_over.coefficient - emp_under.coefficient) > 0.01:
+                break
+            found = False
+            for idx in schedule.active_indexes:
+                ocell = emp_over.schedule[idx]
+                ucell = emp_under.schedule[idx]
+                if ocell.is_locked or ocell.is_historical:
+                    continue
+                if ucell.is_locked or ucell.is_historical:
+                    continue
+                g = ocell.base_shift
+                if g not in group:
+                    continue
+                u = ucell.base_shift
+                if u not in WORK_SHIFTS:
+                    continue
+                if not _can_hold_shift(schedule, emp_under, idx, g, config):
+                    continue
+                if not _can_hold_shift(schedule, emp_over, idx, u, config):
+                    continue
+                ocell.value = u
+                ucell.value = g
+                counts[over] -= 1
+                counts[under] += 1
+                attempts += 1
+                changes = True
+                found = True
+                break
+            if not found:
+                break
 
 
 def _off_over_days(schedule: Schedule, config: SchedulerConfig) -> list[int]:
@@ -428,6 +770,8 @@ def _fallback_shift(
     for shift in allowed:
         if _can_assign_shift(schedule, employee, day_index, shift, config):
             target = schedule.adjusted_demands[day_index].get(shift)
+            if target <= 0:  # 需求≤0 的班次不凭空填（避免制造冗余 A1/D）
+                continue
             gaps.append((target - _actual(schedule, day_index, shift), shift))
     if gaps:
         return max(gaps)[1]
@@ -508,13 +852,15 @@ def _can_convert_rest_to_work(
     day_index: int,
     target: float,
     config: SchedulerConfig,
+    day_actuals: dict[str, float] | None = None,
 ) -> bool:
     cell = employee.schedule[day_index]
     if cell.is_locked or cell.is_historical or cell.base_shift != REST_SHIFT:
         return False
-    if _actual(schedule, day_index, REST_SHIFT) - employee.coefficient < target - config.demand_tolerance:
+    rest_actual = day_actuals[REST_SHIFT] if day_actuals is not None else _actual(schedule, day_index, REST_SHIFT)
+    if rest_actual - employee.coefficient < target - config.demand_tolerance:
         return False
-    return bool(_best_underfilled_shift(schedule, employee, day_index, config))
+    return bool(_best_underfilled_shift(schedule, employee, day_index, config, day_actuals))
 
 
 def _best_underfilled_shift(
@@ -522,6 +868,7 @@ def _best_underfilled_shift(
     employee: Employee,
     day_index: int,
     config: SchedulerConfig,
+    day_actuals: dict[str, float] | None = None,
 ) -> str | None:
     cell = employee.schedule[day_index]
     old_value = cell.value
@@ -529,7 +876,8 @@ def _best_underfilled_shift(
     try:
         options = []
         for shift in SHIFT_ORDER:
-            gap = schedule.adjusted_demands[day_index].get(shift) - _actual(schedule, day_index, shift)
+            actual = day_actuals[shift] if day_actuals is not None else _actual(schedule, day_index, shift)
+            gap = schedule.adjusted_demands[day_index].get(shift) - actual
             if gap <= config.demand_tolerance:
                 continue
             if _can_assign_shift(schedule, employee, day_index, shift, config):
@@ -539,6 +887,44 @@ def _best_underfilled_shift(
         return max(options)[2]
     finally:
         cell.value = old_value
+
+
+def _try_convert_off_to_shift(
+    schedule: Schedule,
+    employee: Employee,
+    day_index: int,
+    config: SchedulerConfig,
+) -> str | None:
+    cell = employee.schedule[day_index]
+    old_value = cell.value
+    cell.value = None
+    result = None
+    try:
+        for shift in ("A3", "A2"):
+            if _can_assign_shift(schedule, employee, day_index, shift, config):
+                result = shift
+                break
+    finally:
+        cell.value = result if result else old_value
+    return result
+
+
+def _try_convert_work_to_rest(
+    schedule: Schedule,
+    employee: Employee,
+    day_index: int,
+    config: SchedulerConfig,
+) -> bool:
+    cell = employee.schedule[day_index]
+    old_value = cell.value
+    cell.value = None
+    result = False
+    try:
+        if _can_assign_rest(schedule, employee, day_index, config):
+            result = True
+    finally:
+        cell.value = REST_SHIFT if result else old_value
+    return result
 
 
 def _shift_priority(shift: str) -> int:
