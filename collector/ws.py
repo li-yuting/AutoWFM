@@ -114,7 +114,7 @@ def _collect_screen(sub, cfg):
         except Exception:
             if attempt < w["retry"]:
                 if backoff > 0:
-                    time.sleep(backoff ** attempt)  # 指数退避: 1,2,4,8...
+                    time.sleep(backoff ** attempt)  # 指数退避: backoff**attempt 秒,次数受 ws.retry 截断(默认 backoff=2,retry=1 时实际仅 1 秒)
                 continue
             return None
         finally:
