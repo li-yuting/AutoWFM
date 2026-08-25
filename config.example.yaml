@@ -16,6 +16,7 @@
 #   - detail_modes[*].url               : 明细导出 API 地址
 #   - detail_modes[*].data.exports      : 导出列名（逗号分隔）
 # 密钥字段（secrets.token / secrets.tenementId / notify.webhook.* / notify.dash_token）
+# token 失效时会自动运行 抓取Token.py 刷新，写入 token.json 并回填 .env；登录账密在根目录 login.json(不入库)。
 # 由 .env 的 AUTOWFM_* 环境变量覆盖（见 collector/_utils.py _SECRET_ENV_MAP）。
 
 endpoints:
@@ -36,7 +37,7 @@ ws:
 detail:
   timeout: 60
 secrets:
-  token: ""              # 明文已迁移到 .env(AUTOWFM_TOKEN);config.yaml 不再入库密钥
+  token: ""              # 主来源 .env(AUTOWFM_TOKEN)；失效自动刷新(抓取Token.py)并同步 token.json
   tenementId: ""         # AUTOWFM_TENEMENT_ID
 storage:
   dir: "data"

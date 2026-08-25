@@ -67,4 +67,11 @@ def load_cfg(path: str | Path = "config.yaml") -> dict:
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     _apply_env_secrets(cfg)
+    # token 兜底：.env(AUTOWFM_TOKEN) 未设置时才读取自动抓取的 token.json
+    secrets = cfg.setdefault("secrets", {})
+    if not str(secrets.get("token") or "").strip():
+        from token_store import load_token, TOKEN_FILE
+        tok = load_token(TOKEN_FILE)
+        if tok:
+            secrets["token"] = tok
     return cfg

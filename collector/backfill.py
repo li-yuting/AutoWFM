@@ -113,18 +113,23 @@ def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end, cu
 
 
 def download_day(mcfg, secrets, day, timeout=60):
-    """下载某天明细 Excel，返回原始 df。"""
+    """下载某天明细 Excel，返回原始 df。token 失效时自动刷新一次后重试。"""
     import requests
-    from collector.detail import _parse_excel
-    data = dict(mcfg["data"])
-    data["token"] = secrets["token"]
-    data["tenementId"] = secrets["tenementId"]
-    dv = day if mcfg["date_format"] == "%Y-%m-%d" else f"{day} 00:00:00"
-    data[mcfg["date_fields"]["start"]] = dv
-    data[mcfg["date_fields"]["end"]] = dv
-    resp = requests.post(mcfg["url"], json=data, timeout=timeout)
-    resp.raise_for_status()
-    return _parse_excel(resp.content)
+    from collector.detail import _parse_excel, _download_content, _should_refresh_on, TokenInvalidError
+    from token_store import refresh_token
+    for attempt in range(2):
+        try:
+            content = _download_content("数据补全", mcfg, secrets, day, timeout)
+            break
+        except (TokenInvalidError, requests.HTTPError) as exc:
+            if attempt == 1 or not _should_refresh_on(exc):
+                raise
+            new_token = refresh_token()
+            if not new_token:
+                raise
+            secrets["token"] = new_token
+            continue
+    return _parse_excel(content)
 
 
 def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=None, now=None):

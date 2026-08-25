@@ -10,6 +10,7 @@
 - `member_limit/` — 腾讯云联络中心成员接待上限批量修改（headless Playwright），manager.py「接待上限」页调用；凭据在 `.env`（AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD），名单在 config.yaml。
 - `writeforecast/` — two independent scripts, not a package: `writeforecast.py` (周度预估 Excel → `data/预估流入量.csv`) and `时段人力数架构准备_v2.py` (班表 Excel → 按日期/小时展开的时段人力架构表)。
 - `manager.py` — optional Tkinter supervisor for the collector, API, dashboard, and shift processes.
+- 根目录 `token_store.py` / `抓取Token.py` — CRM token 自动抓取：Playwright 登录 CRM(SSO) 抓取最新 token，写入 `token.json` 并回填 `.env`(AUTOWFM_TOKEN)。采集/数据补全检测到 token 失效时自动调用刷新；敏感文件 `login.json`、`token.json`、`storage_state.json` 均不入 git。
 - `tests/` — plain-`assert` test scripts (`test_*.py`) plus a live `smoke.py`.
 - Root config: `config.yaml`, `.env` (secrets, git-ignored), `holidays.txt`.
 
@@ -24,6 +25,8 @@ $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m dashboard.app        # 看板 http://127.0.0.1:8080
 .\.venv\Scripts\python.exe -m api.app              # API 服务 http://127.0.0.1:8081
 .\.venv\Scripts\python.exe manager.py              # 桌面管理器 (not -m)
+.\.venv\Scripts\python.exe 抓取Token.py            # 手动刷新 CRM token (--headless 无头)
+.\.venv\Scripts\python.exe token_store.py --selftest   # token_store 自测
 .\.venv\Scripts\python.exe tests\test_storage.py   # 单个测试
 ```
 
@@ -53,4 +56,5 @@ Use `-m` for `collector`/`dashboard`/`api` so the project root stays on `sys.pat
 
 - Never commit secrets into `config.yaml` or source. Put tokens/keys in `.env` (git-ignored), loaded via `load_dotenv()`; mirror placeholders in `.env.example` and `config.example.yaml`.
 - Env vars consumed: `AUTOWFM_TOKEN` / `AUTOWFM_TENEMENT_ID` (CRM export), `AUTOWFM_WEBHOOK_MAIN` / `AUTOWFM_WEBHOOK_SECONDARY` (企微 webhook), `AUTOWFM_DASH_TOKEN` (dashboard/API Bearer), optional `AUTOWFM_API_URL` / `AUTOWFM_DATA_DIR`.
+- CRM token 主来源为 `.env` 的 `AUTOWFM_TOKEN`；失效时由采集/数据补全自动运行 `抓取Token.py` 刷新，并同步写回 `.env` 与 `token.json`。账密放根目录 `login.json`（`{"username":..., "password":...}`），本文件与 `storage_state.json` 均不入 git、不打日志。
 - The dashboard requires `Authorization: Bearer <AUTOWFM_DASH_TOKEN>`; leave the token empty for local development.
