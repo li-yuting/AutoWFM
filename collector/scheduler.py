@@ -74,6 +74,7 @@ def ws_job(cfg, pool):
                 continue
             storage.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
             ok.append(s["name"])
+            _track_gap(s["name"], True, cfg)
         except Exception:
             failed.append(s)
             log.warning(f"[WS] {s['name']} 采集异常(首轮)", exc_info=True)
