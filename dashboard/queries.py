@@ -32,9 +32,6 @@ def _rows_in_day(data_dir, source, date_str):
     return _rows_in(data_dir, source, date_str)
 
 
-def _rows_in_month(data_dir, source, ym):
-    return _rows_in(data_dir, source, ym)
-
 def _hourly_agg(data_dir, source, date_str, keep="last"):
     """{小时: {列: 值}}，keep="last"取每小时最大时间戳，keep="first"取最小。"""
     rows, cols = _rows_in_day(data_dir, source, date_str)
