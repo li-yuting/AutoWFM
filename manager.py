@@ -1114,6 +1114,7 @@ class ManagerUI:
         if not messagebox.askyesno("重启控制台",
                                    "将重启 AutoWFM 管理器。\n采集器/看板会继续运行,由新窗口自动接管。是否继续?"):
             return
+        _release_single_instance_lock()  # 先放锁，否则新实例可能因锁仍被本进程持有而误退出
         try:
             subprocess.Popen([PYTHON, "manager.py"], cwd=str(ROOT),
                              creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
@@ -1128,7 +1129,47 @@ class ManagerUI:
         self.root.destroy()
 
 
+# ── 单实例守卫 ──────────────────────────────────────────────
+# 双 manager 各拉起一套采集器去写同一批 SQLite，会互相把对方顶成
+# "attempt to write a readonly database"。用 Windows 命名互斥量保证同机
+# 同时只有一个 manager；第二份启动直接退出。
+_SINGLE_HANDLE = None  # 持有互斥量句柄，进程存活期间不得被回收(close)
+
+
+def _release_single_instance_lock() -> None:
+    """释放互斥量（重启控制台拉起新实例前调用，让新实例能立即拿到锁）。"""
+    global _SINGLE_HANDLE
+    if _SINGLE_HANDLE:
+        try:
+            import ctypes
+            ctypes.windll.kernel32.CloseHandle(_SINGLE_HANDLE)
+        except Exception:
+            pass
+        _SINGLE_HANDLE = None
+
+
+def _acquire_single_instance_lock() -> bool:
+    """尝试获取单实例锁。已有一个实例在运行返回 False，否则 True。"""
+    global _SINGLE_HANDLE
+    if os.name != "nt":
+        return True  # 非 Windows 直接放行
+    try:
+        import ctypes
+        ERROR_ALREADY_EXISTS = 183
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "AutoWFM.SingleManager")
+        if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return False
+        _SINGLE_HANDLE = handle
+        return True
+    except Exception:
+        return True  # 守卫异常时保守放行，避免误拦启动
+
+
 def main() -> None:
+    if not _acquire_single_instance_lock():
+        log.warning("检测到另一 manager 实例已在运行，本次启动直接退出（单实例守卫）")
+        return
     try:
         cfg = load_cfg(CONFIG_PATH)
     except Exception as exc:
