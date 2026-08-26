@@ -33,6 +33,9 @@ output/
 writeforecast/data/*.xlsx
 writeforecast/data/result/
 
+# ---- 排班计划 Excel（含员工排班，不入库）----
+shift/*.xlsx
+
 # ---- 编辑器 / 系统 ----
 .vscode/
 .idea/
