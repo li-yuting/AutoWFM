@@ -9,14 +9,14 @@
 - `shift/` — scheduling subproject (Flask app `shift/app.py`), supervised by `manager.py`.
 - `member_limit/` — 腾讯云联络中心成员接待上限批量修改（headless Playwright），manager.py「接待上限」页调用；凭据在 `.env`（AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD），名单在 config.yaml。
 - `writeforecast/` — two independent scripts, not a package: `writeforecast.py` (周度预估 Excel → `data/预估流入量.csv`) and `时段人力数架构准备_v2.py` (班表 Excel → 按日期/小时展开的时段人力架构表)。
-- `manager.py` — optional Tkinter supervisor for the collector, API, dashboard, and shift processes.
+- `manager.py` — optional Tkinter supervisor for the collector, API, dashboard, and shift processes. Has a single-instance guard (lock file): a second manager exits immediately on startup - run only one instance at a time, or concurrent writers can trip SQLite readonly errors on `data/*.db`.
 - 根目录 `token_store.py` / `抓取Token.py` — CRM token 自动抓取：Playwright 登录 CRM(SSO) 抓取最新 token，写入 `token.json` 并回填 `.env`(AUTOWFM_TOKEN)。采集/数据补全检测到 token 失效时自动调用刷新；敏感文件 `login.json`、`token.json`、`storage_state.json` 均不入 git。
 - `tests/` — plain-`assert` test scripts (`test_*.py`) plus a live `smoke.py`.
 - Root config: `config.yaml`, `.env` (secrets, git-ignored), `holidays.txt`.
 
 ## Build, Test, and Development Commands
 
-Always use the `.venv` interpreter and set UTF-8 output. There is no build step.
+Always use the `.venv` interpreter and set UTF-8 output. There is no build step. Initial setup: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` (plus `shift/requirements.txt` if touching the shift app) and `.\.venv\Scripts\python.exe -m playwright install chromium` for 抓取Token / member_limit.
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
@@ -43,6 +43,7 @@ Use `-m` for `collector`/`dashboard`/`api` so the project root stays on `sys.pat
 ## Testing Guidelines
 
 - Plain `assert`, no pytest; run each file directly with the `.venv` interpreter.
+- `tests/helpers.py` holds shared test utilities; `tests/__init__.py` exists, so imports from `tests.` work.
 - Name files `tests/test_<module>.py` and functions `test_*`.
 - `tests/smoke.py` hits live WS/requests endpoints and is **not** part of CI.
 - CI (`.github/workflows/ci.yml`) runs `tests/test_*.py` serially on Ubuntu + Python 3.14.
