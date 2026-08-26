@@ -97,24 +97,3 @@ def write_report(online_df: pd.DataFrame, hotline_df: pd.DataFrame,
         pd.DataFrame({"项": list(meta.keys()), "值": list(meta.values())}).to_excel(
             writer, sheet_name="运行说明", index=False)
     return out_path
-def write_client_type_csv(online_df, hotline_df, out_path):
-    """输出分类型CSV：每行一条 [日期, 客户类型, 渠道, 预估进线量, 预估转人工量]。
-
-    取三档预测中的中性值（inbound/transfer 列），四舍五入到整数。
-    在线和热线合并为同一文件，用「渠道」列区分。
-    """
-    rows = []
-    for channel, df in [("在线", online_df), ("热线", hotline_df)]:
-        for _, row in df.sort_values(["date", "client_type"]).iterrows():
-            rows.append({
-                "日期": row["date"].date().isoformat(),
-                "客户类型": row["client_type"],
-                "渠道": channel,
-                "预估进线量": round(row["inbound"]),
-                "预估转人工量": round(row["transfer"]),
-            })
-    out = pd.DataFrame(rows)
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(out_path, index=False, encoding="utf-8-sig")
-    return out_path
