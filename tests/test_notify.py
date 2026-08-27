@@ -29,7 +29,7 @@ def _cfg(data_dir):
         "notify": {
             "screenshot_url": "http://localhost:5001/",
             "webhook": {"main_key": "MAIN", "secondary_key": "SECOND"},
-            "alert": {"hotline_queue": 10, "online_queue": 20, "queue_12378": 1,
+            "alert": {"hotline_queue": 10, "online_queue": 20, "queue_12378": 1, "stall_check": True,
                       "recipients": {"hotline": ["111"], "online": ["222"], "12378": ["333"]}},
         },
     }
@@ -188,6 +188,50 @@ def test_check_alerts_12378_window():
     assert all("12378排队" not in c[2] for c in _capture_alerts(cfg, now)), "出窗口不应告警"
     print("check_alerts_12378_window OK")
 
+def test_check_alerts_stall_hotline():
+    notify._STALL_ALERTED.clear()
+    now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    d = _tmp(); cfg = _cfg(d)
+    # 两条记录转人工量一致 -> 首次告警(艾特 hotline)
+    for t in ("2026-07-28 10:55", "2026-07-28 11:00"):
+        storage.insert("热线", {"时间": t, "转人工量": 1108, "接通量": 1106, "排队量": 0, "累计呼入量": 1187, "外呼量": 0, "外呼接通量": 0}, d)
+    calls = _capture_alerts(cfg, now)
+    assert any("转人工量无变化" in c[2] and "热线" in c[2] and c[1] == ["111"] for c in calls), calls
+    # 值仍一致 -> 去重不重复提醒
+    assert _capture_alerts(cfg, now) == [], "停滞去重后不应重复提醒"
+    # 转人工量变化 -> 清除状态;再次停滞 -> 再提醒
+    storage.insert("热线", {"时间": "2026-07-28 11:05", "转人工量": 1109, "接通量": 1107, "排队量": 0, "累计呼入量": 1188, "外呼量": 0, "外呼接通量": 0}, d)
+    assert _capture_alerts(cfg, now) == [], "转人工量变化不应提醒"
+    storage.insert("热线", {"时间": "2026-07-28 11:10", "转人工量": 1109, "接通量": 1107, "排队量": 0, "累计呼入量": 1188, "外呼量": 0, "外呼接通量": 0}, d)
+    assert any("转人工量无变化" in c[2] for c in _capture_alerts(cfg, now)), "再次停滞应再提醒"
+    # 仅一条记录(无从对比) -> 不告警
+    d2 = _tmp(); cfg2 = _cfg(d2)
+    storage.insert("热线", {"时间": "2026-07-28 11:00", "转人工量": 1, "接通量": 1, "排队量": 0, "累计呼入量": 1, "外呼量": 0, "外呼接通量": 0}, d2)
+    assert _capture_alerts(cfg2, now) == [], "仅一条记录不应告警"
+    print("check_alerts_stall_hotline OK")
+
+def test_check_alerts_stall_online():
+    notify._STALL_ALERTED.clear()
+    now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    d = _tmp(); cfg = _cfg(d)
+    base = {"转人工失败":0,"排队":0,"咨询":0,"在线":5,"小休":0,"示忙":0,"话后":0,"就餐":0,"培训":0,"回访":0}
+    for t in ("2026-07-28 10:55", "2026-07-28 11:00"):
+        storage.insert("在线", {"时间": t, "转人工量": 826, **base}, d)
+    calls = _capture_alerts(cfg, now)
+    assert any("转人工量无变化" in c[2] and "在线" in c[2] and c[1] == ["222"] for c in calls), calls
+    assert _capture_alerts(cfg, now) == [], "去重后不应重复提醒"
+    print("check_alerts_stall_online OK")
+
+def test_check_alerts_stall_disabled():
+    # stall_check: false -> 即使两条一致也不告警
+    notify._STALL_ALERTED.clear()
+    now = datetime.datetime(2026, 7, 28, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    d = _tmp(); cfg = _cfg(d); cfg["notify"]["alert"]["stall_check"] = False
+    for t in ("2026-07-28 10:55", "2026-07-28 11:00"):
+        storage.insert("热线", {"时间": t, "转人工量": 1108, "接通量": 1106, "排队量": 0, "累计呼入量": 1187, "外呼量": 0, "外呼接通量": 0}, d)
+    assert _capture_alerts(cfg, now) == [], "stall_check=false 不应告警"
+    print("check_alerts_stall_disabled OK")
+
 def _seed_full(d):
     storage.insert("热线", {"时间":"2026-07-28 11:00","转人工量":1108,"接通量":1106,"排队量":0,"累计呼入量":1187,"外呼量":0,"外呼接通量":0}, d)
     storage.insert("热线明细", {"时间":"2026-07-28 11:00","签入":87,"通话":38,"空闲":42,"离席":0,"话后":5,"振铃":0,"置忙":0}, d)
@@ -286,6 +330,9 @@ def main():
     test_check_alerts_online()
     test_check_alerts_12378()
     test_check_alerts_12378_window()
+    test_check_alerts_stall_hotline()
+    test_check_alerts_stall_online()
+    test_check_alerts_stall_disabled()
     test_send_report()
     test_build_secondline_msg_empty()
     test_config_notify_block()

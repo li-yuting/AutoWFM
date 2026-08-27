@@ -38,6 +38,26 @@ def latest_snapshot(data_dir, source, date_str):
     return dict(zip(cols, row)) if row else None
 
 
+def latest_two(data_dir, source, date_str):
+    """当天该源 时间 倒序前两条(dict);无表/无数据返回 []。供转人工量停滞检测对比。"""
+    path = Path(data_dir) / f"{source}.db"
+    if not path.exists():
+        return []
+    con = sqlite3.connect(str(path))
+    try:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(t)").fetchall()]
+        if not cols:
+            return []
+        rows = con.execute(
+            f'SELECT {",".join(chr(34) + c + chr(34) for c in cols)} FROM t '
+            f'WHERE "时间" LIKE ? ORDER BY "时间" DESC LIMIT 2',
+            (f"{date_str}%",),
+        ).fetchall()
+    finally:
+        con.close()
+    return [dict(zip(cols, row)) for row in rows]
+
+
 def forecast_at(data_dir, line, now_str):
     """预估流入量.csv 中 线路==line 且 时间==now_str 的 累计预估量;未命中返回 0。"""
     path = Path(data_dir) / "预估流入量.csv"
@@ -176,6 +196,34 @@ def _send_text(key, mobiles, msg):
                           "text": {"content": msg, "mentioned_mobile_list": mobiles}})
 
 
+# 转人工量停滞告警去重:已提醒的源记录于此;转人工量恢复变化后移除,避免连续周期刷屏
+_STALL_ALERTED = set()
+
+
+def _check_stall_alert(now_str, date_str, data_dir, alert, rcpt, wh):
+    """热线/在线:最新两条快照「转人工量」完全一致 -> 艾特负责人(独立告警,与排队阈值无关)。
+
+    去重语义:每个源在「由变化转为停滞」的首次提醒一次;值恢复变化后重置,
+    再次停滞再提醒。仅一条记录(无从对比)视为未停滞。"""
+    if not alert.get("stall_check", True):
+        return
+    for src, key in (("热线", "hotline"), ("在线", "online")):
+        rows = latest_two(data_dir, src, date_str)
+        if len(rows) < 2:
+            _STALL_ALERTED.discard(src)
+            continue
+        q = rows[0].get("转人工量")
+        if q is not None and q == rows[1].get("转人工量"):
+            if src in _STALL_ALERTED:
+                continue
+            _STALL_ALERTED.add(src)
+            msg = (f"⚠️ 转人工量无变化 {now_str}\n"
+                   f"{src} 转人工量：{q}（与上一周期采集值一致），数据疑似未更新，请关注")
+            _send_text(wh["main_key"], rcpt[key], msg)
+        else:
+            _STALL_ALERTED.discard(src)
+
+
 def take_screenshot(url, dash_token=None):
     """Playwright 截图 -> data/screenshot.png;失败返回 None。
     dash_token 非空时带 Authorization: Bearer header(看板启用认证后必需)。"""
@@ -236,6 +284,8 @@ def check_alerts(cfg, now=None):
                 if q >= alert["queue_12378"] and idle < q:
                     msg = f"⚠️ 12378排队告警 {now_str}\n12378排队：{q} 人（阈值 {alert['queue_12378']}，空闲 {idle}）"
                     _send_text(wh["secondary_key"], rcpt["12378"], msg)
+
+        _check_stall_alert(now_str, date_str, data_dir, alert, rcpt, wh)
     except Exception:
         log.exception("check_alerts 异常")
 

@@ -36,6 +36,7 @@ notify:
     hotline_queue: 10
     online_queue: 20
     queue_12378: 1
+    stall_check: true           # 转人工量与上一周期采集值一致时告警(热线/在线,艾特对应负责人;首次停滞提醒一次)
     gap_recipient: ["17629050914"]   # 采集缺口告警 @ 人(走 main_key)
     recipients:
       hotline: ["17629050914", "18829270926"]
