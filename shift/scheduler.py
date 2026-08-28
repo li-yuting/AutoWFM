@@ -7,6 +7,7 @@ from models import AdjustedDemand, Employee, Schedule, Warning
 from utils import (
     A_CLASS_SHIFTS,
     COMFORT_SHIFTS,
+    D_FAMILY,
     HIGH_BALANCE_SHIFTS,
     HIGH_LIMIT_SHIFTS,
     HIGH_SHIFTS,
@@ -14,6 +15,7 @@ from utils import (
     SECONDARY_BALANCE_SHIFTS,
     SHIFT_ORDER,
     WORK_SHIFTS,
+    Z_FAMILY,
     almost_met,
     date_label,
 )
@@ -749,14 +751,29 @@ def _can_assign_shift(
         return False
     if _consecutive_work_count(employee, day_index, shift) > _max_work_days(employee, config):
         return False
-    if shift in HIGH_LIMIT_SHIFTS:
-        if _high_limited_count(employee, day_index) > config.max_high_consecutive:
+    if shift in D_FAMILY:
+        if _d_run_count(employee, day_index) > config.max_high_consecutive:
             return False
         if _is_rest(employee, day_index + 1):
             return False
-        if _is_a_class(employee, day_index - 1) and _is_high_limited(employee, day_index - 2):
+        if _is_a_class(employee, day_index - 1) and _is_d_family(employee, day_index - 2):
             return False
-        if _is_a_class(employee, day_index + 1) and _is_high_limited(employee, day_index + 2):
+        if _is_a_class(employee, day_index + 1) and _is_d_family(employee, day_index + 2):
+            return False
+    if shift in Z_FAMILY:
+        if _is_rest(employee, day_index + 1):
+            return False
+        if _z_run_count(employee, day_index) > config.z_max_consecutive:
+            return False
+        if _z_sandwich(employee, day_index):
+            return False
+    if shift == "B":
+        prev = employee.schedule[day_index - 1].base_shift if day_index >= 1 else ""
+        if prev in ("D", "D1", "Z"):
+            return False
+    if shift == "C":
+        prev = employee.schedule[day_index - 1].base_shift if day_index >= 1 else ""
+        if prev not in HIGH_LIMIT_SHIFTS:
             return False
     if shift in A_CLASS_SHIFTS:
         if _is_high_limited(employee, day_index - 1) and _is_high_limited(employee, day_index + 1):
@@ -1113,8 +1130,35 @@ def _streak_bounds(employee: Employee, day_index: int, shifts: set[str]) -> tupl
     return start, end
 
 
-def _high_limited_count(employee: Employee, day_index: int) -> int:
-    return 1 + _same_group_count(employee, day_index - 1, -1, HIGH_LIMIT_SHIFTS) + _same_group_count(employee, day_index + 1, 1, HIGH_LIMIT_SHIFTS)
+def _d_run_count(employee: Employee, day_index: int) -> int:
+    return 1 + _same_group_count(employee, day_index - 1, -1, D_FAMILY) + _same_group_count(employee, day_index + 1, 1, D_FAMILY)
+
+
+def _z_run_count(employee: Employee, day_index: int) -> int:
+    return 1 + _same_group_count(employee, day_index - 1, -1, Z_FAMILY) + _same_group_count(employee, day_index + 1, 1, Z_FAMILY)
+
+
+def _is_d_family(employee: Employee, day_index: int) -> bool:
+    return 0 <= day_index < len(employee.schedule) and employee.schedule[day_index].base_shift in D_FAMILY
+
+
+def _is_z_family(employee: Employee, day_index: int) -> bool:
+    return 0 <= day_index < len(employee.schedule) and employee.schedule[day_index].base_shift in Z_FAMILY
+
+
+def _z_sandwich(employee: Employee, day_index: int) -> bool:
+    """day_index 排 Z/Z1 是否形成 Z→A→Z：任一方向的连续 A 类段（含 B/C）另一端紧贴 Z 族。"""
+    return _a_run_touches_z(employee, day_index - 1, -1) or _a_run_touches_z(employee, day_index + 1, +1)
+
+
+def _a_run_touches_z(employee: Employee, start: int, step: int) -> bool:
+    idx = start
+    if not (0 <= idx < len(employee.schedule)) or employee.schedule[idx].base_shift not in A_CLASS_SHIFTS:
+        return False
+    while 0 <= idx + step < len(employee.schedule) and employee.schedule[idx + step].base_shift in A_CLASS_SHIFTS:
+        idx += step
+    beyond = idx + step
+    return 0 <= beyond < len(employee.schedule) and employee.schedule[beyond].base_shift in Z_FAMILY
 
 
 def _same_count(employee: Employee, start: int, step: int, shift: str) -> int:
