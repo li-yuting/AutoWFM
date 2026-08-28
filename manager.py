@@ -6,12 +6,15 @@
 - 崩溃重启:运行时段内进程意外退出自动重启;启动后 30s 内崩溃计为一次失败,
   连续 3 次失败则暂停自动重启并弹出置顶告警。
 - 手工控制:每个任务可手动 启动/停止/重启。
+- 自启动开关:采集器/API/看板 各有「自启动」勾选框,勾选才参与每日计划自动启动与崩溃
+  自动重启,与是否手动停止过无关;勾选状态持久化到 manager_state.json。排班无此开关,始终纯手动。
 
 运行:
     .\\.venv\\Scripts\\python.exe manager.py
 """
 from __future__ import annotations
 import datetime as dt
+import json
 import logging
 import os
 import subprocess
@@ -85,6 +88,25 @@ def set_autostart(enabled: bool) -> None:
         if AUTOSTART_LNK.exists():
             AUTOSTART_LNK.unlink()
             log.info("开机自启已关闭")
+
+
+AUTO_START_STATE = ROOT / "manager_state.json"  # 「自启动」勾选持久化(采集器/API/看板)
+
+
+def load_auto_start_state() -> dict[str, bool]:
+    """读取「自启动」勾选状态;文件缺失/损坏返回 {}(视为全部勾选)。"""
+    try:
+        data = json.loads(AUTO_START_STATE.read_text(encoding="utf-8"))
+        return {str(k): bool(v) for k, v in data.items()}
+    except Exception:
+        return {}
+
+
+def save_auto_start_state(state: dict[str, bool]) -> None:
+    """原子写入勾选状态,防写坏后误回退成默认勾选。"""
+    tmp = AUTO_START_STATE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, AUTO_START_STATE)
 
 
 def _make_tray_image():
@@ -191,6 +213,7 @@ class ManagedTask:
         self.cwd = cwd or ROOT                    # 运行工作目录(脚本所属项目目录)
         self.match_key = match_key                # 若非 None,external-PID 按此串匹配(否则取脚本名/module)
         self.auto_enabled = auto_enabled          # False -> 仅手动启停,不自动启停/自动重启
+        self.auto_start = True                    # 「自启动」勾选(UI 持久化);False 时到点不自启、崩溃不自动重启
         # pre_run + run_target: 子进程先 exec(pre_run)(如 sys.path 注入/webbrowser 抑制),
         # 再 runpy.run_path(run_target, run_name="__main__")。替代独立包装脚本(如原 shift_manager.py)
         if pre_run and run_target:
@@ -377,15 +400,15 @@ class ManagedTask:
             self.auto_stopped_today = True
             return events
 
-        # 3. 自动启动（每天触发一次）
-        if in_window and not self.auto_started_today:
-            if not self.is_running() and self.external_pid is None and not self.user_stopped:
+        # 3. 自动启动（每天触发一次;只看「自启动」勾选,与是否手动停止过无关）
+        if in_window and not self.auto_started_today and self.auto_start:
+            if not self.is_running() and self.external_pid is None:
                 self.start(automatic=True)
                 events.append({"type": "info", "msg": f"{self.name}: 到达运行时段,已自动启动"})
             self.auto_started_today = True
 
-        # 4. 崩溃重启与健康检查（仅在窗口内）
-        if in_window:
+        # 4. 崩溃重启与健康检查（仅在窗口内;未勾选「自启动」时不做任何自动干预）
+        if in_window and self.auto_start:
             if self.process is not None:
                 rc = self.process.poll()
                 if rc is None:
@@ -465,6 +488,12 @@ class ManagerUI:
         self.root.minsize(820, 560)
 
         self.tasks: list[ManagedTask] = [ManagedTask(**d) for d in TASK_DEFS]
+        # 恢复「自启动」勾选状态(仅自动启停任务;缺省视为勾选)
+        self._auto_start_vars: dict[str, tk.BooleanVar] = {}
+        _state = load_auto_start_state()
+        for _t in self.tasks:
+            if _t.auto_enabled:
+                _t.auto_start = _state.get(_t.name, True)
         self._vars: list[dict[str, tk.StringVar]] = []
         self._log_boxes: list[scrolledtext.ScrolledText] = []
         self._nav_buttons: list[tk.Button] = []
@@ -514,6 +543,11 @@ class ManagerUI:
             tk.Label(strip, textvariable=vars_["src"], fg="#777777").grid(row=r, column=5, sticky="w")
             btns = tk.Frame(strip)
             btns.grid(row=r, column=7, sticky="e")
+            if task.auto_enabled:
+                chk = tk.BooleanVar(value=task.auto_start)
+                self._auto_start_vars[task.name] = chk
+                tk.Checkbutton(btns, text="自启动", variable=chk,
+                               command=lambda t=task: self._toggle_auto_start(t)).pack(side=tk.LEFT, padx=(0, 6))
             tk.Button(btns, text="启动", width=8, command=lambda t=task: self._manual_start(t)).pack(side=tk.LEFT, padx=3)
             tk.Button(btns, text="停止", width=8, command=lambda t=task: self._manual_stop(t)).pack(side=tk.LEFT, padx=3)
             tk.Button(btns, text="重启", width=8, command=lambda t=task: self._manual_restart(t)).pack(side=tk.LEFT, padx=3)
@@ -587,6 +621,11 @@ class ManagerUI:
     def _manual_restart(self, task: ManagedTask) -> None:
         task.restart()
         self._update_status()
+
+    def _toggle_auto_start(self, task: ManagedTask) -> None:
+        task.auto_start = self._auto_start_vars[task.name].get()
+        save_auto_start_state({name: v.get() for name, v in self._auto_start_vars.items()})
+        log.info("%s: 自启动勾选=%s", task.name, task.auto_start)
 
     # ---- 监控循环 ----
     def _refresh(self) -> None:

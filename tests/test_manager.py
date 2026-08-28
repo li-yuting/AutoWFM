@@ -8,7 +8,8 @@ from unittest.mock import patch, MagicMock
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from manager import (compute_auto_start, auto_stop_minutes, in_run_window, schedule_text,
-                       ManagerUI, ManagedTask, GRACE_SECONDS, parse_schedule, schedule_action)
+                       ManagerUI, ManagedTask, GRACE_SECONDS, parse_schedule, schedule_action,
+                       load_auto_start_state, save_auto_start_state)
 
 SH = ZoneInfo("Asia/Shanghai")
 
@@ -338,6 +339,101 @@ def test_member_limit_schedule_rearm():
     print("member_limit_schedule_rearm OK")
 
 
+# ── 「自启动」勾选框行为 ─────────────────────────────────────────────
+
+_TMP = Path(__file__).resolve().parent / ".test_tmp"  # gitignored 测试临时目录(勿用系统 %TEMP%)
+
+def test_tick_auto_start_requires_checkbox():
+    """未勾选自启动:窗口内到点不自启、不置位;中途勾选后窗口内立即自启动。"""
+    task = _make_task()
+    task._current_date = dt.date(2026, 8, 1)  # 避开跨天重置
+    task.auto_start = False
+    with patch("manager.subprocess.Popen", return_value=_running_proc()) as popen:
+        events = task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
+        popen.assert_not_called()
+    assert not task.is_running()
+    assert len(events) == 0
+    assert task.auto_started_today is False, "未勾选时不置位,当日内勾选后仍可自启"
+    task.auto_start = True
+    with patch("manager.subprocess.Popen", return_value=_running_proc()):
+        events = task.tick(True, dt.datetime(2026, 8, 1, 10, 0, tzinfo=SH))
+    assert task.is_running(), "勾选后处于运行时段应立即自启动"
+    assert len(events) == 1 and "已自动启动" in events[0]["msg"]
+    print("tick_auto_start_requires_checkbox OK")
+
+
+def test_tick_checkbox_overrides_user_stopped():
+    """勾选自启动时,即使此前手动停止过(如窗口开启前点了停止),到点也应自启动。"""
+    task = _make_task()
+    task._current_date = dt.date(2026, 8, 1)
+    task.user_stopped = True
+    with patch("manager.subprocess.Popen", return_value=_running_proc()):
+        events = task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
+    assert task.is_running(), "自启动只由勾选状态决定,不应被历史手动停止拦截"
+    assert len(events) == 1
+    print("tick_checkbox_overrides_user_stopped OK")
+
+
+def test_tick_no_crash_restart_when_unchecked():
+    """未勾选自启动:窗口内进程崩溃不自动重启、不告警、失败计数不涨。"""
+    task = _make_task()
+    task._current_date = dt.date(2026, 8, 1)
+    task.auto_start = False
+    proc = _running_proc()
+    with patch("manager.subprocess.Popen", return_value=proc):
+        task.start(automatic=False)
+    proc.poll.return_value = 1
+    events = task.tick(True, dt.datetime(2026, 8, 1, 9, 40, tzinfo=SH))
+    assert not task.is_running()
+    assert len(events) == 0
+    assert task.restart_failures == 0
+    print("tick_no_crash_restart_when_unchecked OK")
+
+
+def test_auto_start_state_roundtrip():
+    """勾选状态持久化:缺文件/损坏返回空(默认全勾选),保存后读取一致。"""
+    _TMP.mkdir(exist_ok=True)
+    state_path = _TMP / "manager_state.json"
+    state_path.unlink(missing_ok=True)
+    with patch("manager.AUTO_START_STATE", state_path):
+        assert load_auto_start_state() == {}
+        save_auto_start_state({"采集器": False, "API": True, "看板": True})
+        assert load_auto_start_state() == {"采集器": False, "API": True, "看板": True}
+        state_path.write_text("{broken", encoding="utf-8")
+        assert load_auto_start_state() == {}, "损坏文件应回退为空(默认全勾选)"
+    state_path.unlink(missing_ok=True)
+    print("auto_start_state_roundtrip OK")
+
+
+def test_ui_auto_start_checkboxes():
+    """勾选框只属于采集器/API/看板;切换勾选写任务属性并落盘,新实例恢复。"""
+    _TMP.mkdir(exist_ok=True)
+    state_path = _TMP / "ui_manager_state.json"
+    state_path.unlink(missing_ok=True)
+    roots = []
+    try:
+        with patch("manager.AUTO_START_STATE", state_path):
+            root = tk.Tk(); root.withdraw(); roots.append(root)
+            ui = ManagerUI(root, _cfg())
+            assert set(ui._auto_start_vars) == {"采集器", "API", "看板"}, "排班不应有勾选框"
+            ui._auto_start_vars["API"].set(False)
+            ui._toggle_auto_start(ui.tasks[1])
+            assert ui.tasks[1].auto_start is False
+            assert load_auto_start_state() == {"采集器": True, "API": False, "看板": True}
+            root2 = tk.Tk(); root2.withdraw(); roots.append(root2)
+            ui2 = ManagerUI(root2, _cfg())
+            assert ui2.tasks[0].auto_start is True
+            assert ui2.tasks[1].auto_start is False, "新实例应恢复未勾选状态"
+    finally:
+        state_path.unlink(missing_ok=True)
+        for r in roots:
+            try:
+                r.destroy()
+            except Exception:
+                pass
+    print("ui_auto_start_checkboxes OK")
+
+
 def main():
     test_auto_start_weekday()
     test_auto_start_weekend()
@@ -362,6 +458,11 @@ def main():
     test_ui_constructs()
     test_update_status_sets_dot()
     test_member_limit_schedule_rearm()
+    test_tick_auto_start_requires_checkbox()
+    test_tick_checkbox_overrides_user_stopped()
+    test_tick_no_crash_restart_when_unchecked()
+    test_auto_start_state_roundtrip()
+    test_ui_auto_start_checkboxes()
     print("ALL manager tests OK")
 
 
