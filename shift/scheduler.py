@@ -1336,10 +1336,6 @@ def _is_d_family(employee: Employee, day_index: int) -> bool:
     return 0 <= day_index < len(employee.schedule) and employee.schedule[day_index].base_shift in D_FAMILY
 
 
-def _is_z_family(employee: Employee, day_index: int) -> bool:
-    return 0 <= day_index < len(employee.schedule) and employee.schedule[day_index].base_shift in Z_FAMILY
-
-
 def _z_sandwich(employee: Employee, day_index: int) -> bool:
     """day_index 排 Z/Z1 是否形成 Z→A→Z：任一方向的连续 A 类段（含 B/C）另一端紧贴 Z 族。"""
     return _a_run_touches_z(employee, day_index - 1, -1) or _a_run_touches_z(employee, day_index + 1, +1)
