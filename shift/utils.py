@@ -3,13 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-SHIFT_ORDER = ("D", "D1", "Z", "Z1", "A1", "A4", "A2", "A3")
+SHIFT_ORDER = ("D", "D1", "Z", "Z1", "C", "B", "A1", "A4", "A2", "A3")
 ALL_SHIFTS = set(SHIFT_ORDER) | {"OFF"}
 HIGH_SHIFTS = {"D", "D1"}
+D_FAMILY = HIGH_SHIFTS
 SECONDARY_HIGH_SHIFTS = {"Z", "Z1"}
-HIGH_LIMIT_SHIFTS = HIGH_SHIFTS | SECONDARY_HIGH_SHIFTS
-A_CLASS_SHIFTS = {"A1", "A2", "A3", "A4"}
+Z_FAMILY = SECONDARY_HIGH_SHIFTS
+HIGH_LIMIT_SHIFTS = D_FAMILY | Z_FAMILY
+A_CLASS_SHIFTS = {"A1", "A2", "A3", "A4", "B", "C"}
 COMFORT_SHIFTS = {"A2", "A3"}
+D_BALANCE_SHIFTS = set(D_FAMILY)
+Z_BALANCE_SHIFTS = set(Z_FAMILY)
+A_BALANCE_SHIFTS = {"A1", "A4"}
+BALANCE_GROUPS = (D_BALANCE_SHIFTS, Z_BALANCE_SHIFTS, A_BALANCE_SHIFTS)
+# 旧均衡组（Task 4 删除；删除前 scheduler/validators/writer 仍在引用）
 HIGH_BALANCE_SHIFTS = {"D", "D1", "A1"}
 SECONDARY_BALANCE_SHIFTS = {"Z", "Z1", "A4"}
 WORK_SHIFTS = set(SHIFT_ORDER)
