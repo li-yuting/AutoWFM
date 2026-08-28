@@ -3,17 +3,19 @@ from __future__ import annotations
 from collections import defaultdict
 
 from models import Employee, Schedule, Warning
-from scheduler import SchedulerConfig
+from scheduler import SchedulerConfig, _work_blocks_between_rests
 from utils import (
     A_BALANCE_SHIFTS,
     A_CLASS_SHIFTS,
     ALL_SHIFTS,
     D_BALANCE_SHIFTS,
+    D_FAMILY,
     HIGH_LIMIT_SHIFTS,
     HIGH_SHIFTS,
     REST_SHIFT,
     WORK_SHIFTS,
     Z_BALANCE_SHIFTS,
+    Z_FAMILY,
     date_label,
 )
 
@@ -30,6 +32,9 @@ def validate_schedule(schedule: Schedule, config: SchedulerConfig) -> list[Warni
     warnings.extend(_check_phase3(schedule))
     warnings.extend(_check_newbie_high(schedule))
     warnings.extend(_check_high_streaks(schedule, config))
+    warnings.extend(_check_b_predecessor(schedule))
+    warnings.extend(_check_c_placement(schedule))
+    warnings.extend(_check_z_blocks(schedule, config))
     warnings.extend(_check_sandwich(schedule))
     warnings.extend(_check_balance(schedule, config))
     warnings.extend(_check_conversion(schedule))
@@ -172,11 +177,11 @@ def _check_newbie_high(schedule: Schedule) -> list[Warning]:
 def _check_high_streaks(schedule: Schedule, config: SchedulerConfig) -> list[Warning]:
     warnings = []
     for employee in schedule.employees:
-        for start, end, streak in _streaks(employee, HIGH_LIMIT_SHIFTS):
+        for start, end, streak in _streaks(employee, D_FAMILY):
             if streak > config.max_high_consecutive:
                 severity = _streak_severity(employee, start, end)
                 warnings.append(
-                    Warning("08", severity, f"D/D1/Z/Z1 连续 {streak} 天，超过 {config.max_high_consecutive} 天", employee.name, schedule.dates[end])
+                    Warning("08", severity, f"D/D1 连续 {streak} 天，超过 {config.max_high_consecutive} 天", employee.name, schedule.dates[end])
                 )
     return warnings
 
@@ -319,6 +324,80 @@ def _rest_blocks(employee: Employee) -> list[tuple[int, int]]:
     if start is not None:
         blocks.append((start, len(employee.schedule) - 1))
     return blocks
+
+
+def _pair_severity(employee: Employee, first_idx: int, second_idx: int) -> str:
+    for i in (first_idx, second_idx):
+        cell = employee.schedule[i]
+        if cell.is_locked or cell.is_historical:
+            return "WARN"
+    return "ERROR"
+
+
+def _check_b_predecessor(schedule: Schedule) -> list[Warning]:
+    warnings = []
+    for employee in schedule.employees:
+        for idx in schedule.active_indexes:
+            if idx <= 0 or employee.schedule[idx].base_shift != "B":
+                continue
+            prev = employee.schedule[idx - 1].base_shift
+            if prev not in ("D", "D1", "Z"):
+                continue
+            warnings.append(
+                Warning("16", _pair_severity(employee, idx - 1, idx),
+                        f"B 班前一日为 {prev}，不允许（仅 D/D1/Z 后可排 B，Z1 后可排）",
+                        employee.name, schedule.dates[idx])
+            )
+    return warnings
+
+
+def _check_c_placement(schedule: Schedule) -> list[Warning]:
+    warnings = []
+    for employee in schedule.employees:
+        for idx in schedule.active_indexes:
+            if idx <= 0 or employee.schedule[idx].base_shift != "C":
+                continue
+            prev = employee.schedule[idx - 1].base_shift
+            if prev in HIGH_LIMIT_SHIFTS:
+                continue
+            warnings.append(
+                Warning("17", _pair_severity(employee, idx - 1, idx),
+                        f"C 班前一日为 {prev or '空'}，C 只能排在 D/D1/Z/Z1 之后",
+                        employee.name, schedule.dates[idx])
+            )
+    return warnings
+
+
+def _check_z_blocks(schedule: Schedule, config: SchedulerConfig) -> list[Warning]:
+    warnings = []
+    for employee in schedule.employees:
+        # ① 连排超硬上限
+        for start, end, streak in _streaks(employee, Z_FAMILY):
+            if streak > config.z_max_consecutive:
+                warnings.append(
+                    Warning("18", _streak_severity(employee, start, end),
+                            f"Z/Z1 连续 {streak} 天，超过上限 {config.z_max_consecutive} 天",
+                            employee.name, schedule.dates[end])
+                )
+        # ③ 块长短于软下限（完全落在历史段的块跳过）
+        for start, end, _ in _streaks(employee, Z_FAMILY):
+            length = end - start + 1
+            if length < config.z_min_consecutive and end >= schedule.work_start_index:
+                warnings.append(
+                    Warning("18", "WARN",
+                            f"Z/Z1 块仅 {length} 天，少于下限 {config.z_min_consecutive} 天",
+                            employee.name, schedule.dates[start])
+                )
+        # ② 同一工作块内多个 Z 块（Z→A→Z）
+        for wb_start, wb_end in _work_blocks_between_rests(employee):
+            runs = [(s, e) for s, e, _ in _streaks(employee, Z_FAMILY) if wb_start <= s and e <= wb_end]
+            if len(runs) > 1:
+                warnings.append(
+                    Warning("18", _multi_block_severity(employee, runs[0], runs[-1]),
+                            "两次休息之间出现多个 Z/Z1 块（Z→A→Z）",
+                            employee.name, schedule.dates[runs[1][0]])
+                )
+    return warnings
 
 
 def _count_any(employee: Employee, shifts: set[str], schedule: Schedule) -> int:
