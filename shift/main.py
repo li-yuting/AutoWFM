@@ -16,6 +16,8 @@ MAX_CONSECUTIVE_REST = 2
 MIN_WORK_DAYS_BETWEEN_REST_BLOCKS = 3
 MAX_HIGH_CONSECUTIVE = 2
 BALANCE_THRESHOLD = 2
+Z_MIN_CONSECUTIVE = 2
+Z_MAX_CONSECUTIVE = 3
 # ==============================
 
 
@@ -33,6 +35,8 @@ def main() -> int:
         min_work_days_between_rest_blocks=MIN_WORK_DAYS_BETWEEN_REST_BLOCKS,
         max_high_consecutive=MAX_HIGH_CONSECUTIVE,
         balance_threshold=BALANCE_THRESHOLD,
+        z_min_consecutive=Z_MIN_CONSECUTIVE,
+        z_max_consecutive=Z_MAX_CONSECUTIVE,
     )
 
     input_path = Path(args.input)

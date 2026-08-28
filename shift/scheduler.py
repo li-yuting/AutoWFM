@@ -29,6 +29,8 @@ class SchedulerConfig:
     max_high_consecutive: int = 2
     balance_threshold: int = 2
     demand_tolerance: float = 0.35
+    z_min_consecutive: int = 2
+    z_max_consecutive: int = 3
 
 
 def run_scheduler(schedule: Schedule, config: SchedulerConfig) -> Schedule:

@@ -50,6 +50,26 @@ _WARN_LABELS = {
 }
 
 
+def _scheduler_config_from(form) -> tuple[SchedulerConfig | None, str | None]:
+    try:
+        config = SchedulerConfig(
+            preset_rest_days=int(form.get("preset_rest_days", 8)),
+            max_consecutive_work_normal=int(form.get("max_consecutive_work_normal", 6)),
+            max_consecutive_work_phase3=int(form.get("max_consecutive_work_phase3", 5)),
+            max_consecutive_rest=int(form.get("max_consecutive_rest", 2)),
+            min_work_days_between_rest_blocks=int(form.get("min_work_days_between_rest_blocks", 3)),
+            max_high_consecutive=int(form.get("max_high_consecutive", 2)),
+            balance_threshold=int(form.get("balance_threshold", 2)),
+            z_min_consecutive=int(form.get("z_min_consecutive", 2)),
+            z_max_consecutive=int(form.get("z_max_consecutive", 3)),
+        )
+    except (ValueError, TypeError) as e:
+        return None, f"参数格式错误: {e}"
+    if config.z_min_consecutive < 1 or config.z_max_consecutive < config.z_min_consecutive:
+        return None, "Z/Z1 连排参数无效：需满足 1 ≤ 下限 ≤ 上限"
+    return config, None
+
+
 def _build_reminders(warnings) -> dict | None:
     """根据验证警告生成简化提醒。班表 sheet 无空白（check_id 01）则返回 None。"""
     if not any(w.check_id == "01" for w in warnings):
@@ -102,18 +122,9 @@ def run():
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         return jsonify({"error": "请上传 .xlsx 格式的 Excel 文件"}), 400
 
-    try:
-        config = SchedulerConfig(
-            preset_rest_days=int(request.form.get("preset_rest_days", 8)),
-            max_consecutive_work_normal=int(request.form.get("max_consecutive_work_normal", 6)),
-            max_consecutive_work_phase3=int(request.form.get("max_consecutive_work_phase3", 5)),
-            max_consecutive_rest=int(request.form.get("max_consecutive_rest", 2)),
-            min_work_days_between_rest_blocks=int(request.form.get("min_work_days_between_rest_blocks", 3)),
-            max_high_consecutive=int(request.form.get("max_high_consecutive", 2)),
-            balance_threshold=int(request.form.get("balance_threshold", 2)),
-        )
-    except (ValueError, TypeError) as e:
-        return jsonify({"error": f"参数格式错误: {e}"}), 400
+    config, error = _scheduler_config_from(request.form)
+    if error:
+        return jsonify({"error": error}), 400
 
     tmpdir = tempfile.mkdtemp(prefix="autoshift_")
     input_path = os.path.join(tmpdir, file.filename)
