@@ -418,16 +418,16 @@ def repair_employee_rest_count(schedule: Schedule, config: SchedulerConfig) -> N
 
 
 def cluster_high_pairs(schedule: Schedule, config: SchedulerConfig) -> None:
-    """两次休息之间若有恰好 2 个高强班(D/D1/Z/Z1)且不连续，调成连续并尽量贴前段休息。
+    """两次休息之间若有恰好 2 个 D 族班(D/D1)且不连续，调成连续并尽量贴前段休息。
 
-    只用「同日交换」：每个工作日的班次多元集合不变。
+    只用「同日交换」：每个工作日的班次多元集合不变。Z/Z1 块由 shape_z_runs 负责，不参与计数。
     """
     for employee in schedule.employees:
         for start, end in _work_blocks_between_rests(employee):
             highs = [
                 idx
                 for idx in range(start, end + 1)
-                if employee.schedule[idx].base_shift in HIGH_LIMIT_SHIFTS
+                if employee.schedule[idx].base_shift in D_FAMILY
             ]
             if len(highs) != 2 or highs[1] == highs[0] + 1:
                 continue
@@ -437,7 +437,7 @@ def cluster_high_pairs(schedule: Schedule, config: SchedulerConfig) -> None:
                 continue
             # 优先级1：把高强班放到前段休息(OFF)后，即块首 start。
             # 放宽：允许同一员工行内直接移动（仅需当日相应班次仍在容差内），以真正提升贴 OFF 数。
-            placed = employee.schedule[start].base_shift in HIGH_LIMIT_SHIFTS
+            placed = employee.schedule[start].base_shift in D_FAMILY
             if not placed:
                 placed = _move_high_in_row(schedule, employee, h2, start, config) or _move_high_in_row(
                     schedule, employee, h1, start, config
@@ -448,7 +448,7 @@ def cluster_high_pairs(schedule: Schedule, config: SchedulerConfig) -> None:
             for other in (
                 i
                 for i in range(start, end + 1)
-                if i != start and employee.schedule[i].base_shift in HIGH_LIMIT_SHIFTS
+                if i != start and employee.schedule[i].base_shift in D_FAMILY
             ):
                 if other != start + 1:
                     # 也放宽为行内移动，避免跨员工 swap 带来的连带损耗
@@ -484,9 +484,9 @@ def _work_blocks_between_rests(employee: Employee) -> list[tuple[int, int]]:
 def _move_high_in_row(
     schedule: Schedule, employee: Employee, day_from: int, day_to: int, config: SchedulerConfig
 ) -> bool:
-    """同一员工行内把高强从 day_from 移到 day_to(OFF 后)。放宽不变式：允许小幅日计改变，但需在容差内。
+    """同一员工行内把 D 族班从 day_from 移到 day_to(OFF 后)。放宽不变式：允许小幅日计改变，但需在容差内。
 
-    把高强移到 day_to、day_to 的原工作班次挪回 day_from；仅当两个受影响班次的移除都不致跌破需求容差、且双方约束成立时接受。
+    把 D 族班移到 day_to、day_to 的原工作班次挪回 day_from；仅当两个受影响班次的移除都不致跌破需求容差、且双方约束成立时接受。
     """
     if day_from == day_to:
         return False
@@ -496,7 +496,7 @@ def _move_high_in_row(
         return False
     high = src.base_shift
     x = dst.base_shift
-    if high not in HIGH_LIMIT_SHIFTS or x not in WORK_SHIFTS:
+    if high not in D_FAMILY or x not in WORK_SHIFTS:
         return False
     if not _demand_ok_removing(schedule, day_from, high, employee.coefficient, config):
         return False

@@ -143,6 +143,19 @@ def test_redistribute_balance_z_group():
     assert bases1[0] == "Z" and bases0[0] == "A2"
 
 
+def test_cluster_high_pairs_d_family_only():
+    from scheduler import cluster_high_pairs, precompute
+    # 块内 D@1 与 D1@3 不相邻 → 应聚成 D D1 相连；Z1@5 不参与计数
+    # （旧逻辑按 HIGH_LIMIT_SHIFTS 计 D/Z1/D1 = 3 个 → 跳过聚合；precompute 供需求容差校验）
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "D", "A2", "D1", "A2", "Z1", "OFF", "A2"])], lock_values=False)
+    precompute(s, make_config())
+    cluster_high_pairs(s, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[1:3] == ["D", "D1"], bases
+    assert bases[3] == "A2", bases
+
+
 if __name__ == "__main__":
     test_z_config_defaults()
     test_scheduler_config_from_form()
@@ -159,4 +172,5 @@ if __name__ == "__main__":
     test_b_rule_assign_time()
     test_z_sandwich_deep_gap()
     test_redistribute_balance_z_group()
+    test_cluster_high_pairs_d_family_only()
     print("test_shift_scheduler OK")
