@@ -185,24 +185,67 @@ def test_shape_z_merges_runs():
     assert bases[1:6] == ["Z"] * 5, bases
 
 
-def test_shape_z_pulls_to_off():
+def test_shape_z_pull_rejects_invariant_break():
+    # 贴 OFF 对调(len2 Z 块)会产生 Z/A2/Z → check09 夹心 + check18 多 Z 块，守卫必须拒绝并原样保留
     from scheduler import precompute
     s = make_schedule([("甲", "A", 1.0, "正式",
                         ["OFF", "A2", "Z", "Z", "A2", "A2", "A2", "A2", "OFF", "A2"])], lock_values=False)
     precompute(s, make_config())  # 供需求容差校验
     shape_z_runs(s, make_config())
     bases = [c.base_shift for c in s.employees[0].schedule]
-    assert bases[1] == "Z", bases
+    assert bases[1] == "A2" and bases[2:4] == ["Z", "Z"], bases
 
 
 def test_swap_pair():
+    # 单 Z 块对调贴 OFF：Z@2 ← A2@1 → OFF Z A2 ...，不拆 Z 块、无夹心，合法
     from scheduler import precompute
     s = make_schedule([("甲", "A", 1.0, "正式",
-                        ["OFF", "A2", "Z", "Z", "A2", "OFF", "A2", "A2", "A2", "A2"])], lock_values=False)
+                        ["OFF", "A2", "Z", "A2", "A2", "OFF", "A2", "A2", "A2", "A2"])], lock_values=False)
     precompute(s, make_config())  # 供需求容差校验
     assert _swap_pair(s, s.employees[0], 1, 2, make_config())
     bases = [c.base_shift for c in s.employees[0].schedule]
     assert bases[1:3] == ["Z", "A2"]
+
+
+def test_swap_pair_rejects_b_after_d():
+    # 对调后 D 移到 B 前一日 → 幸存 B 违反前置规则(check16)，必须整体回退
+    from scheduler import precompute
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "B", "D", "A2", "OFF", "A2", "A2", "A2", "A2", "A2"])], lock_values=False)
+    precompute(s, make_config())  # 供需求容差校验
+    assert not _swap_pair(s, s.employees[0], 1, 2, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[1] == "B" and bases[2] == "D", bases
+
+
+def test_convert_to_z_rejects_b_prev_break():
+    # B 的前一日被整成 Z → 幸存邻格被破坏(check16)，_convert_to_z 必须回退
+    # （Z→A→Z 深夹心已由 _can_place_z/_z_sandwich 在放置前拒绝，见 test_z_sandwich_deep_gap）
+    from scheduler import _convert_to_z, precompute
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "A2", "A2", "B", "A2", "OFF", "A2", "A2", "A2", "A2"])], lock_values=False)
+    precompute(s, make_config())  # 供需求容差校验
+    assert not _convert_to_z(s, s.employees[0], 2, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[2] == "A2" and bases[3] == "B", bases
+
+
+def test_move_rest_converts_blocking_z():
+    # 8 连班 B Z Z Z A2 A2 A3 A3，唯一合法 OFF 位(5)被前日 Z@4 的次日规则挡住：
+    # 回退应把 Z@4 原子转为缺口班(A2)，再落 OFF@5
+    from scheduler import _move_rest_to_day, precompute
+
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "B", "Z", "Z", "Z", "A2", "A2", "A3", "A3", "OFF", "OFF", "A2"])],
+                      lock_values=False)
+    s.demands[4].demand["A2"] = 2.0  # 前日格的缺口班候选
+    precompute(s, make_config())
+    emp = s.employees[0]
+    assert _move_rest_to_day(s, emp, 5, make_config())
+    bases = [c.base_shift for c in emp.schedule]
+    assert bases[5] == "OFF", bases
+    assert bases[4] == "A2", bases            # 挡路 Z 已转为缺口班
+    assert bases[2:4] == ["Z", "Z"], bases    # 剩余 Z 块仍为 2 天
 
 
 if __name__ == "__main__":
@@ -225,6 +268,9 @@ if __name__ == "__main__":
     test_shape_z_extends_orphan()
     test_shape_z_respects_zmax()
     test_shape_z_merges_runs()
-    test_shape_z_pulls_to_off()
+    test_shape_z_pull_rejects_invariant_break()
     test_swap_pair()
+    test_swap_pair_rejects_b_after_d()
+    test_convert_to_z_rejects_b_prev_break()
+    test_move_rest_converts_blocking_z()
     print("test_shift_scheduler OK")

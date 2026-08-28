@@ -264,7 +264,10 @@ def redistribute_rest_excess(schedule: Schedule, config: SchedulerConfig) -> Non
                                 over_cell.value = None
                                 if _can_assign_shift(schedule, employee, over_idx, under_shift, config):
                                     over_cell.value = old_under
-                                    swap_ok = True
+                                    if _neighbors_valid(schedule, employee, over_idx, config) and _neighbors_valid(
+                                        schedule, employee, under_idx, config
+                                    ):
+                                        swap_ok = True
                         finally:
                             if not swap_ok:
                                 over_cell.value = old_over
@@ -317,6 +320,10 @@ def repair_rest_excess(schedule: Schedule, config: SchedulerConfig) -> None:
                 break
             _, shift, _, employee = best
             _assign(schedule, employee, day_index, shift)
+            if not _neighbors_valid(schedule, employee, day_index, config):
+                # 邻格规则被破坏（如 D 后次日变 OFF）：回退本格，不计入 changed
+                _assign(schedule, employee, day_index, REST_SHIFT)
+                continue
             day_actuals[REST_SHIFT] -= employee.coefficient
             day_actuals[shift] += employee.coefficient
             changed = True
@@ -484,7 +491,12 @@ def _convert_to_z(schedule: Schedule, employee: Employee, day_index: int, config
         return False
     if not _can_place_z(schedule, employee, day_index, config):
         return False
+    old = employee.schedule[day_index].value
     employee.schedule[day_index].value = "Z"
+    if not _neighbors_valid(schedule, employee, day_index, config):
+        # 幸存邻格被破坏（如 B 前一日变 Z）：回退
+        employee.schedule[day_index].value = old
+        return False
     return True
 
 
@@ -506,7 +518,10 @@ def _swap_pair(schedule: Schedule, employee: Employee, i: int, j: int, config: S
         schedule, employee, j, si, config
     ):
         ci.value, cj.value = sj, si
-        return True
+        if _neighbors_valid(schedule, employee, i, config) and _neighbors_valid(
+            schedule, employee, j, config
+        ):
+            return True
     ci.value = old_i
     cj.value = old_j
     return False
@@ -600,8 +615,11 @@ def _move_high_in_row(
     old_src, old_dst = src.value, dst.value
     src.value = x
     dst.value = high
-    if _can_hold_shift(schedule, employee, day_from, x, config) and _can_hold_shift(
-        schedule, employee, day_to, high, config
+    if (
+        _can_hold_shift(schedule, employee, day_from, x, config)
+        and _can_hold_shift(schedule, employee, day_to, high, config)
+        and _neighbors_valid(schedule, employee, day_from, config)
+        and _neighbors_valid(schedule, employee, day_to, config)
     ):
         return True
     src.value, dst.value = old_src, old_dst
@@ -683,6 +701,14 @@ def redistribute_balance(schedule: Schedule, config: SchedulerConfig) -> None:
                     continue
                 ocell.value = u
                 ucell.value = g
+                if not (
+                    _neighbors_valid(schedule, emp_over, idx, config)
+                    and _neighbors_valid(schedule, emp_under, idx, config)
+                ):
+                    # 任一员工的邻格规则被破坏：整体回退
+                    ocell.value = g
+                    ucell.value = u
+                    continue
                 counts[over] -= 1
                 counts[under] += 1
                 attempts += 1
@@ -839,6 +865,17 @@ def _can_assign_shift(
     cell = employee.schedule[day_index]
     if cell.is_locked or cell.is_historical or not cell.is_blank:
         return False
+    return _cell_rules_ok(schedule, employee, day_index, shift, config)
+
+
+def _cell_rules_ok(
+    schedule: Schedule,
+    employee: Employee,
+    day_index: int,
+    shift: str,
+    config: SchedulerConfig,
+) -> bool:
+    """day_index 为 shift 时本格的家族/前置规则是否成立（不含空格/锁定守卫）。"""
     if employee.is_phase3 and shift not in COMFORT_SHIFTS:
         return False
     if employee.is_newbie and shift in HIGH_SHIFTS:
@@ -871,6 +908,19 @@ def _can_assign_shift(
             return False
     if shift in A_CLASS_SHIFTS:
         if _is_high_limited(employee, day_index - 1) and _is_high_limited(employee, day_index + 1):
+            return False
+    return True
+
+
+def _neighbors_valid(schedule: Schedule, employee: Employee, day_index: int, config: SchedulerConfig) -> bool:
+    """day_index 变更后，其前/后一天的幸存格仍须满足各自的家族/前置规则。"""
+    for idx in (day_index - 1, day_index + 1):
+        if not (0 <= idx < len(employee.schedule)):
+            continue
+        cell = employee.schedule[idx]
+        if cell.is_locked or cell.is_historical or cell.is_blank:
+            continue
+        if not _cell_rules_ok(schedule, employee, idx, cell.base_shift, config):
             return False
     return True
 
@@ -917,6 +967,43 @@ def _rest_block_spacing_ok(employee: Employee, day_index: int, min_work_days: in
     return True
 
 
+def _try_rest_with_high_conversion(
+    schedule: Schedule,
+    employee: Employee,
+    day_index: int,
+    config: SchedulerConfig,
+) -> bool:
+    """OFF 插入仅被前一日 D/Z 的「次日非 OFF」规则挡住时：把该 D/Z 原子转为当日缺口工作班再插 OFF。
+
+    调用前提：employee.schedule[day_index] 已被置为 REST_SHIFT（由 _move_rest_to_day 负责，
+    失败时由其恢复原值）。本函数只负责前一日格的转换与回退。
+    """
+    prev_idx = day_index - 1
+    if prev_idx < 0:
+        return False
+    prev_cell = employee.schedule[prev_idx]
+    if (
+        prev_cell.is_locked
+        or prev_cell.is_historical
+        or prev_cell.base_shift not in HIGH_LIMIT_SHIFTS
+    ):
+        return False
+    replacement = _best_underfilled_shift(schedule, employee, prev_idx, config)
+    if replacement is None:
+        return False
+    old_prev = prev_cell.value
+    prev_cell.value = replacement
+    if (
+        _rest_streak_at(employee, day_index) <= config.max_consecutive_rest
+        and _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+        and _neighbors_valid(schedule, employee, day_index, config)
+        and _neighbors_valid(schedule, employee, prev_idx, config)
+    ):
+        return True
+    prev_cell.value = old_prev
+    return False
+
+
 def _move_rest_to_day(
     schedule: Schedule,
     employee: Employee,
@@ -929,7 +1016,11 @@ def _move_rest_to_day(
     if (
         _rest_streak_at(employee, day_index) <= config.max_consecutive_rest
         and _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+        and _neighbors_valid(schedule, employee, day_index, config)
     ):
+        return True
+
+    if _try_rest_with_high_conversion(schedule, employee, day_index, config):
         return True
 
     start, end = _streak_bounds(employee, day_index, {REST_SHIFT})
@@ -951,6 +1042,8 @@ def _move_rest_to_day(
                 if (
                     _rest_streak_at(employee, day_index) <= config.max_consecutive_rest
                     and _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+                    and _neighbors_valid(schedule, employee, day_index, config)
+                    and _neighbors_valid(schedule, employee, rest_idx, config)
                 ):
                     return True
             rest_cell.value = rest_old
@@ -1015,8 +1108,11 @@ def _try_convert_off_to_shift(
     try:
         for shift in ("A3", "A2"):
             if _can_assign_shift(schedule, employee, day_index, shift, config):
-                result = shift
-                break
+                cell.value = shift
+                if _neighbors_valid(schedule, employee, day_index, config):
+                    result = shift
+                    break
+                cell.value = None
     finally:
         cell.value = result if result else old_value
     return result
@@ -1034,7 +1130,9 @@ def _try_convert_work_to_rest(
     result = False
     try:
         if _can_assign_rest(schedule, employee, day_index, config):
-            result = True
+            cell.value = REST_SHIFT
+            if _neighbors_valid(schedule, employee, day_index, config):
+                result = True
     finally:
         cell.value = REST_SHIFT if result else old_value
     return result
