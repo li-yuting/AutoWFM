@@ -6,13 +6,12 @@ from typing import Iterable
 from models import AdjustedDemand, Employee, Schedule, Warning
 from utils import (
     A_CLASS_SHIFTS,
+    BALANCE_GROUPS,
     COMFORT_SHIFTS,
     D_FAMILY,
-    HIGH_BALANCE_SHIFTS,
     HIGH_LIMIT_SHIFTS,
     HIGH_SHIFTS,
     REST_SHIFT,
-    SECONDARY_BALANCE_SHIFTS,
     SHIFT_ORDER,
     WORK_SHIFTS,
     Z_FAMILY,
@@ -540,11 +539,11 @@ def _can_hold_shift(
 
 
 def redistribute_balance(schedule: Schedule, config: SchedulerConfig) -> None:
-    """均匀高强(D/D1/A1)与次高强(Z/Z1/A4)班在合格(非三期)员工间的分布。
+    """均匀 D/D1、Z/Z1、A1/A4 三组班在合格(非三期)员工间的分布。
 
     balance_threshold 表示允许的计数差：差 > 阈值才触发再分布。用同系数「同日交换」，每日计数不变。
     """
-    for group in (HIGH_BALANCE_SHIFTS, SECONDARY_BALANCE_SHIFTS):
+    for group in BALANCE_GROUPS:
         counts = [_active_count_any(e, group, schedule) for e in schedule.employees]
         changes = True
         attempts = 0
@@ -559,7 +558,7 @@ def redistribute_balance(schedule: Schedule, config: SchedulerConfig) -> None:
                 i
                 for i in range(len(schedule.employees))
                 if not schedule.employees[i].is_phase3
-            ]  # 只有非三期能承接这两组班次
+            ]  # 只有非三期能承接这三组班次
             if not receivers:
                 break
             under = min(receivers, key=lambda i: counts[i])
@@ -985,12 +984,11 @@ def _rest_key(
 
 
 def _shift_key(schedule: Schedule, employee: Employee, day_index: int, shift: str) -> tuple:
-    if shift in HIGH_BALANCE_SHIFTS:
-        balance = _active_count_any(employee, HIGH_BALANCE_SHIFTS, schedule)
-    elif shift in SECONDARY_BALANCE_SHIFTS:
-        balance = _active_count_any(employee, SECONDARY_BALANCE_SHIFTS, schedule)
-    else:
-        balance = 0
+    balance = 0
+    for group in BALANCE_GROUPS:
+        if shift in group:
+            balance = _active_count_any(employee, group, schedule)
+            break
     return (
         balance,
         _active_count(employee, shift, schedule),

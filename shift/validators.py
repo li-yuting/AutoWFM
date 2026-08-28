@@ -5,14 +5,15 @@ from collections import defaultdict
 from models import Employee, Schedule, Warning
 from scheduler import SchedulerConfig
 from utils import (
+    A_BALANCE_SHIFTS,
     A_CLASS_SHIFTS,
     ALL_SHIFTS,
-    HIGH_BALANCE_SHIFTS,
+    D_BALANCE_SHIFTS,
     HIGH_LIMIT_SHIFTS,
     HIGH_SHIFTS,
     REST_SHIFT,
-    SECONDARY_BALANCE_SHIFTS,
     WORK_SHIFTS,
+    Z_BALANCE_SHIFTS,
     date_label,
 )
 
@@ -198,16 +199,18 @@ def _check_sandwich(schedule: Schedule) -> list[Warning]:
 
 def _check_balance(schedule: Schedule, config: SchedulerConfig) -> list[Warning]:
     warnings = []
-    high_counts = [_count_any(employee, HIGH_BALANCE_SHIFTS, schedule) for employee in schedule.employees]
-    secondary_counts = [_count_any(employee, SECONDARY_BALANCE_SHIFTS, schedule) for employee in schedule.employees]
-    if high_counts and max(high_counts) - min(high_counts) > config.balance_threshold:
-        warnings.append(
-            Warning("10", "WARN", f"高强均衡组 max-min={max(high_counts) - min(high_counts)}，超过 {config.balance_threshold}")
-        )
-    if secondary_counts and max(secondary_counts) - min(secondary_counts) > config.balance_threshold:
-        warnings.append(
-            Warning("10", "WARN", f"次高强均衡组 max-min={max(secondary_counts) - min(secondary_counts)}，超过 {config.balance_threshold}")
-        )
+    groups = [
+        ("D/D1", D_BALANCE_SHIFTS),
+        ("Z/Z1", Z_BALANCE_SHIFTS),
+        ("A1/A4", A_BALANCE_SHIFTS),
+    ]
+    employees = [e for e in schedule.employees if not e.is_phase3]
+    for label, group in groups:
+        counts = [_count_any(employee, group, schedule) for employee in employees]
+        if counts and max(counts) - min(counts) > config.balance_threshold:
+            warnings.append(
+                Warning("10", "WARN", f"{label} 均衡 max-min={max(counts) - min(counts)}，超过 {config.balance_threshold}")
+            )
     return warnings
 
 

@@ -126,6 +126,23 @@ def test_z_sandwich_deep_gap():
     assert not _can_assign_shift(s, s.employees[0], 3, "Z", make_config())
 
 
+def test_redistribute_balance_z_group():
+    from scheduler import redistribute_balance
+    # 与简报原 fixture 的差异：各插入 1 天 OFF。原 fixture 两行均 10 连勤，
+    # _can_assign_shift 的连勤上限(6)使 _can_hold_shift 恒 False，永远无法交换。
+    s = make_schedule([
+        ("甲", "A", 1.0, "正式", ["Z", "Z", "Z", "OFF"] + ["A2"] * 6),
+        ("乙", "A", 1.0, "正式", ["A2"] * 5 + ["OFF"] + ["A2"] * 4),
+    ], lock_values=False)
+    redistribute_balance(s, make_config(balance_threshold=2))
+    bases0 = [c.base_shift for c in s.employees[0].schedule]
+    bases1 = [c.base_shift for c in s.employees[1].schedule]
+    n0 = sum(1 for b in bases0 if b in ("Z", "Z1"))
+    n1 = sum(1 for b in bases1 if b in ("Z", "Z1"))
+    assert n0 - n1 <= 2
+    assert bases1[0] == "Z" and bases0[0] == "A2"
+
+
 if __name__ == "__main__":
     test_z_config_defaults()
     test_scheduler_config_from_form()
@@ -141,4 +158,5 @@ if __name__ == "__main__":
     test_fallback_never_bc_without_demand()
     test_b_rule_assign_time()
     test_z_sandwich_deep_gap()
+    test_redistribute_balance_z_group()
     print("test_shift_scheduler OK")

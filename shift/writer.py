@@ -9,12 +9,13 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from models import Schedule
 from utils import (
-    HIGH_BALANCE_SHIFTS,
+    A_BALANCE_SHIFTS,
+    D_BALANCE_SHIFTS,
     HIGH_LIMIT_SHIFTS,
     REST_SHIFT,
-    SECONDARY_BALANCE_SHIFTS,
     SHIFT_ORDER,
     WORK_SHIFTS,
+    Z_BALANCE_SHIFTS,
     date_label,
 )
 
@@ -148,28 +149,31 @@ def _write_stats(ws, schedule: Schedule) -> None:
 
     row += 2
     row = _section(ws, row, "员工统计", header_fill, header_font)
-    ws.append(["姓名", "班组", "高强均衡(D/D1/A1)", "次高强均衡(Z/Z1/A4)", "休息天数", "连续双休次数"])
+    ws.append(["姓名", "班组", "D/D1 均衡", "Z/Z1 均衡", "A1/A4 均衡", "休息天数", "连续双休次数"])
     _style_header(ws[row])
     row += 1
     for employee in schedule.employees:
-        high_balance = 0
-        secondary_balance = 0
+        d_count = 0
+        z_count = 0
+        a_count = 0
         rest_days = 0
         double_rests = 0
         prev_rest = False
         for idx in schedule.active_indexes:
             base = employee.schedule[idx].base_shift
-            if base in HIGH_BALANCE_SHIFTS:
-                high_balance += 1
-            if base in SECONDARY_BALANCE_SHIFTS:
-                secondary_balance += 1
+            if base in D_BALANCE_SHIFTS:
+                d_count += 1
+            if base in Z_BALANCE_SHIFTS:
+                z_count += 1
+            if base in A_BALANCE_SHIFTS:
+                a_count += 1
             is_rest = base == "OFF"
             if is_rest:
                 rest_days += 1
             if is_rest and prev_rest:
                 double_rests += 1
             prev_rest = is_rest
-        ws.append([employee.name, employee.group, high_balance, secondary_balance, rest_days, double_rests])
+        ws.append([employee.name, employee.group, d_count, z_count, a_count, rest_days, double_rests])
         row += 1
 
     row += 2
