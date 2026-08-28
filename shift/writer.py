@@ -11,11 +11,12 @@ from models import Schedule
 from utils import (
     A_BALANCE_SHIFTS,
     D_BALANCE_SHIFTS,
-    HIGH_LIMIT_SHIFTS,
+    D_FAMILY,
     REST_SHIFT,
     SHIFT_ORDER,
     WORK_SHIFTS,
     Z_BALANCE_SHIFTS,
+    Z_FAMILY,
     date_label,
 )
 
@@ -59,7 +60,7 @@ def _highlight_schedule(ws, schedule: Schedule) -> None:
             continue
         idx = schedule.dates.index(w.date)
         col = date_cols[w.date]
-        if w.check_id in ("04", "05", "08"):
+        if w.check_id in ("04", "05", "08", "18"):
             start, end = _containing_streak(emp, idx, _streak_shifts(w.check_id))
         elif w.check_id == "14":
             start, end = _rest_gap_range(emp, idx)
@@ -77,7 +78,9 @@ def _streak_shifts(check_id: str) -> set[str]:
     if check_id == "05":
         return {REST_SHIFT}
     if check_id == "08":
-        return HIGH_LIMIT_SHIFTS
+        return D_FAMILY
+    if check_id == "18":
+        return Z_FAMILY
     return WORK_SHIFTS
 
 

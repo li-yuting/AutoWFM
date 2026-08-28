@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(_ROOT, "shift"))
 from openpyxl import Workbook  # noqa: E402
 
 from shift_test_utils import make_config, make_schedule  # noqa: E402
-from writer import _write_stats  # noqa: E402
+from utils import D_FAMILY, REST_SHIFT, WORK_SHIFTS, Z_FAMILY  # noqa: E402
+from writer import _streak_shifts, _write_stats  # noqa: E402
 
 
 def test_stats_employee_columns():
@@ -42,7 +43,15 @@ def test_stats_values():
     assert row_yi == [0, 0, 0]
 
 
+def test_streak_shifts_family():
+    assert _streak_shifts("08") == D_FAMILY
+    assert _streak_shifts("18") == Z_FAMILY
+    assert _streak_shifts("05") == {REST_SHIFT}
+    assert _streak_shifts("04") == WORK_SHIFTS
+
+
 if __name__ == "__main__":
     test_stats_employee_columns()
     test_stats_values()
+    test_streak_shifts_family()
     print("test_shift_writer OK")
