@@ -230,6 +230,18 @@ def test_convert_to_z_rejects_b_prev_break():
     assert bases[2] == "A2" and bases[3] == "B", bases
 
 
+def test_rest_not_after_own_high():
+    # 高强班次日不能是 OFF：_can_assign_rest 拒绝紧贴自家前一日 D/Z/Z1 的休息
+    from scheduler import _can_assign_rest
+    s = make_schedule([("甲", "A", 1.0, "正式", ["Z", None, None, None])])
+    emp = s.employees[0]
+    assert not _can_assign_rest(s, emp, 1, make_config())   # 前日 Z
+    s2 = make_schedule([("甲", "A", 1.0, "正式", ["Z1", None, None, None])])
+    assert not _can_assign_rest(s2, s2.employees[0], 1, make_config())  # 前日 Z1
+    s3 = make_schedule([("甲", "A", 1.0, "正式", ["A2", None, None, None])])
+    assert _can_assign_rest(s3, s3.employees[0], 1, make_config())  # 前日 A2 可休
+
+
 def test_move_rest_converts_blocking_z():
     # 8 连班 B Z Z Z A2 A2 A3 A3，唯一合法 OFF 位(5)被前日 Z@4 的次日规则挡住：
     # 回退应把 Z@4 原子转为缺口班(A2)，再落 OFF@5
@@ -272,5 +284,6 @@ if __name__ == "__main__":
     test_swap_pair()
     test_swap_pair_rejects_b_after_d()
     test_convert_to_z_rejects_b_prev_break()
+    test_rest_not_after_own_high()
     test_move_rest_converts_blocking_z()
     print("test_shift_scheduler OK")

@@ -852,6 +852,9 @@ def _can_assign_rest(
         return False
     if _consecutive_count(employee, day_index, REST_SHIFT) > config.max_consecutive_rest:
         return False
+    if _is_high_limited(employee, day_index - 1):
+        # 高强班（D/D1/Z/Z1）次日不能是 OFF：排休息时不得紧贴前一日的自家高强班
+        return False
     return _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
 
 
