@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(_ROOT, "shift"))
 from scheduler import SchedulerConfig  # noqa: E402
 from shift_test_utils import make_config, make_schedule  # noqa: E402
 from scheduler import _can_assign_shift  # noqa: E402
+from scheduler import shape_z_runs, _swap_pair  # noqa: E402
 
 
 def test_z_config_defaults():
@@ -156,6 +157,54 @@ def test_cluster_high_pairs_d_family_only():
     assert bases[3] == "A2", bases
 
 
+def test_shape_z_extends_orphan():
+    from scheduler import precompute
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "Z", "A2", "A2", "A2", "A2", "A2", "OFF", "A2", "A2"])], lock_values=False)
+    precompute(s, make_config())  # 供需求容差校验（与 cluster_high_pairs 用例同因）
+    shape_z_runs(s, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[1:3] == ["Z", "Z"], bases
+
+
+def test_shape_z_respects_zmax():
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "Z", "Z", "Z", "A2", "A2", "A2", "A2", "OFF", "A2"])], lock_values=False)
+    shape_z_runs(s, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[4] == "A2", "已达上限不得再扩"
+
+
+def test_shape_z_merges_runs():
+    from scheduler import precompute
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "Z", "Z", "A2", "Z", "Z", "A2", "OFF", "A2", "A2"])], lock_values=False)
+    precompute(s, make_config(z_max_consecutive=5))  # 供需求容差校验
+    shape_z_runs(s, make_config(z_max_consecutive=5))
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[1:6] == ["Z"] * 5, bases
+
+
+def test_shape_z_pulls_to_off():
+    from scheduler import precompute
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "A2", "Z", "Z", "A2", "A2", "A2", "A2", "OFF", "A2"])], lock_values=False)
+    precompute(s, make_config())  # 供需求容差校验
+    shape_z_runs(s, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[1] == "Z", bases
+
+
+def test_swap_pair():
+    from scheduler import precompute
+    s = make_schedule([("甲", "A", 1.0, "正式",
+                        ["OFF", "A2", "Z", "Z", "A2", "OFF", "A2", "A2", "A2", "A2"])], lock_values=False)
+    precompute(s, make_config())  # 供需求容差校验
+    assert _swap_pair(s, s.employees[0], 1, 2, make_config())
+    bases = [c.base_shift for c in s.employees[0].schedule]
+    assert bases[1:3] == ["Z", "A2"]
+
+
 if __name__ == "__main__":
     test_z_config_defaults()
     test_scheduler_config_from_form()
@@ -173,4 +222,9 @@ if __name__ == "__main__":
     test_z_sandwich_deep_gap()
     test_redistribute_balance_z_group()
     test_cluster_high_pairs_d_family_only()
+    test_shape_z_extends_orphan()
+    test_shape_z_respects_zmax()
+    test_shape_z_merges_runs()
+    test_shape_z_pulls_to_off()
+    test_swap_pair()
     print("test_shift_scheduler OK")

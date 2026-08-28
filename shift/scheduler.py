@@ -43,6 +43,7 @@ def run_scheduler(schedule: Schedule, config: SchedulerConfig) -> Schedule:
     redistribute_rest_excess(schedule, config)
     repair_rest_excess(schedule, config)
     repair_employee_rest_count(schedule, config)
+    shape_z_runs(schedule, config)
     cluster_high_pairs(schedule, config)
     redistribute_balance(schedule, config)
     return schedule
@@ -415,6 +416,100 @@ def repair_employee_rest_count(schedule: Schedule, config: SchedulerConfig) -> N
                         employee.name,
                     )
                 )
+
+
+def shape_z_runs(schedule: Schedule, config: SchedulerConfig) -> None:
+    """Z/Z1 块整型（软约束）：短块扩长、同工作块内合并、块尽量贴前一个 OFF。
+
+    行内改动均受需求容差与 `_can_assign_shift` 硬约束保护。
+    """
+    for employee in schedule.employees:
+        _extend_short_z_blocks(schedule, employee, config)
+        _merge_z_blocks(schedule, employee, config)
+        _pull_z_blocks_to_off(schedule, employee, config)
+
+
+def _z_blocks(employee: Employee) -> list[tuple[int, int]]:
+    return [(start, end) for start, end, _ in _group_streaks(employee, Z_FAMILY)]
+
+
+def _extend_short_z_blocks(schedule: Schedule, employee: Employee, config: SchedulerConfig) -> None:
+    for start, end in list(_z_blocks(employee)):
+        if end - start + 1 >= config.z_min_consecutive:
+            continue
+        for day_to in (start - 1, end + 1):
+            if _convert_to_z(schedule, employee, day_to, config):
+                break
+
+
+def _merge_z_blocks(schedule: Schedule, employee: Employee, config: SchedulerConfig) -> None:
+    for wb_start, wb_end in list(_work_blocks_between_rests(employee)):
+        runs = [r for r in _z_blocks(employee) if wb_start <= r[0] and r[1] <= wb_end]
+        if len(runs) < 2:
+            continue
+        gap = list(range(runs[0][1] + 1, runs[1][0]))
+        new_len = runs[1][1] - runs[0][0] + 1  # 合并后总长 = 首块起点..末块终点跨度（已含间隔日）
+        if new_len > config.z_max_consecutive or not gap:
+            continue
+        if all(_can_place_z(schedule, employee, i, config) for i in gap):
+            for i in gap:
+                _convert_to_z(schedule, employee, i, config)
+
+
+def _pull_z_blocks_to_off(schedule: Schedule, employee: Employee, config: SchedulerConfig) -> None:
+    for wb_start, wb_end in _work_blocks_between_rests(employee):
+        for z_start, _z_end in _z_blocks(employee):
+            if wb_start < z_start <= wb_end:
+                _swap_pair(schedule, employee, z_start - 1, z_start, config)
+                break  # 每个工作块只尝试第一个 Z 块
+
+
+def _can_place_z(schedule: Schedule, employee: Employee, day_index: int, config: SchedulerConfig) -> bool:
+    """day_index 能否改为 Z（不动格，试空后校验）。"""
+    cell = employee.schedule[day_index]
+    if cell.is_locked or cell.is_historical or cell.base_shift not in WORK_SHIFTS or cell.base_shift in Z_FAMILY:
+        return False
+    if not _demand_ok_removing(schedule, day_index, cell.base_shift, employee.coefficient, config):
+        return False
+    old = cell.value
+    cell.value = None
+    try:
+        return _can_assign_shift(schedule, employee, day_index, "Z", config)
+    finally:
+        cell.value = old
+
+
+def _convert_to_z(schedule: Schedule, employee: Employee, day_index: int, config: SchedulerConfig) -> bool:
+    if not (0 <= day_index < len(employee.schedule)):
+        return False
+    if not _can_place_z(schedule, employee, day_index, config):
+        return False
+    employee.schedule[day_index].value = "Z"
+    return True
+
+
+def _swap_pair(schedule: Schedule, employee: Employee, i: int, j: int, config: SchedulerConfig) -> bool:
+    """行内对调 i/j 两格：双方可动、移除不破需求容差、互换后硬约束成立。"""
+    ci, cj = employee.schedule[i], employee.schedule[j]
+    if ci.is_locked or ci.is_historical or cj.is_locked or cj.is_historical:
+        return False
+    si, sj = ci.base_shift, cj.base_shift
+    if si not in WORK_SHIFTS or sj not in WORK_SHIFTS or si == sj:
+        return False
+    if not _demand_ok_removing(schedule, i, si, employee.coefficient, config):
+        return False
+    if not _demand_ok_removing(schedule, j, sj, employee.coefficient, config):
+        return False
+    old_i, old_j = ci.value, cj.value
+    ci.value, cj.value = None, None
+    if _can_assign_shift(schedule, employee, i, sj, config) and _can_assign_shift(
+        schedule, employee, j, si, config
+    ):
+        ci.value, cj.value = sj, si
+        return True
+    ci.value = old_i
+    cj.value = old_j
+    return False
 
 
 def cluster_high_pairs(schedule: Schedule, config: SchedulerConfig) -> None:
