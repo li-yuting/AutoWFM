@@ -75,7 +75,7 @@ def test_backtest_sigma():
 def test_three_band_forecast():
     hist = make_history(40)
     fd = _future_dates(hist)
-    out = forecast.three_band_forecast(hist, fd)
+    out, sigma = forecast.three_band_forecast(hist, fd)
     cols = {"date", "client_type", "client_vol", "ratio", "inbound",
             "inbound_low", "inbound_high", "transfer", "transfer_low", "transfer_high"}
     assert set(out.columns) == cols
@@ -84,6 +84,8 @@ def test_three_band_forecast():
     assert (out["transfer_low"] <= out["transfer"]).all()
     assert (out["transfer"] <= out["transfer_high"]).all()
     assert not out.isna().any().any()
+    # 返回的 sigma 应与独立回测一致，main 无需再跑一遍 backtest_sigma
+    assert sigma == forecast.backtest_sigma(hist)
     print("PASS test_three_band_forecast")
 
 

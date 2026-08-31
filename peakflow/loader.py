@@ -51,11 +51,11 @@ def load_channel_data(path: Path) -> pd.DataFrame:
         "transfer": _to_num(raw[c_tr]),
     })
     df = df[df["client_type"] != config.TOTAL_TYPE].reset_index(drop=True)
-    _validate(df, raw, path)
+    _validate(df, raw, path, c_cnt)
     return df
 
 
-def _validate(df: pd.DataFrame, raw: pd.DataFrame, path: Path) -> None:
+def _validate(df: pd.DataFrame, raw: pd.DataFrame, path: Path, c_cnt: str) -> None:
     for d, sub in df.groupby("date"):
         have = set(sub["client_type"])
         miss = set(config.CLIENT_TYPES) - have
@@ -67,7 +67,7 @@ def _validate(df: pd.DataFrame, raw: pd.DataFrame, path: Path) -> None:
         sub = df[df["date"] == d]
         if sub["client_count"].isna().all():
             continue
-        exp = float(str(trow.iloc[2]).replace(",", ""))
+        exp = float(str(trow[c_cnt]).replace(",", ""))
         if abs(sub["client_count"].sum() - exp) > 1e-3:
             raise ValueError(
                 f"{path} {d.date()} 客户量合计不一致: 分项和={sub['client_count'].sum():.0f} 合计={exp:.0f}")

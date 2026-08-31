@@ -24,7 +24,7 @@ def _sample():
     hist = make_history(35)
     fd = _future_dates(hist, 10)
     from peakflow.forecast import three_band_forecast, backtest_sigma
-    df = three_band_forecast(hist, fd)
+    df, _ = three_band_forecast(hist, fd)
     sig = {"在线": backtest_sigma(hist), "热线": backtest_sigma(hist)}
     return df, sig
 

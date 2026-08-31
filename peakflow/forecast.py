@@ -76,7 +76,7 @@ def backtest_sigma(history_df: pd.DataFrame) -> dict:
     return sigma
 
 
-def three_band_forecast(history_df: pd.DataFrame, future_dates: list) -> pd.DataFrame:
+def three_band_forecast(history_df: pd.DataFrame, future_dates: list) -> tuple[pd.DataFrame, dict]:
     base = point_forecast(history_df, future_dates)
     sigma = backtest_sigma(history_df)
     k = config.SIGMA_K
@@ -94,4 +94,4 @@ def three_band_forecast(history_df: pd.DataFrame, future_dates: list) -> pd.Data
     out["inbound_high"] = high_in
     out["transfer_low"] = low_tr
     out["transfer_high"] = high_tr
-    return out
+    return out, sigma

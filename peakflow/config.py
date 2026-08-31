@@ -7,8 +7,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CFG_PATH = BASE_DIR / "config.yaml"
 
 def _load_forecast_cfg():
+    if not CFG_PATH.is_file():
+        return {}
     with open(CFG_PATH, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+        cfg = yaml.safe_load(f) or {}
     return cfg.get("forecast", {})
 
 _fc = _load_forecast_cfg()

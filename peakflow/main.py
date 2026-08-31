@@ -7,7 +7,7 @@ from pathlib import Path
 
 from peakflow import config, dashboard, loader, report
 from peakflow import fetch as fetch_mod
-from peakflow.forecast import backtest_sigma, three_band_forecast
+from peakflow.forecast import three_band_forecast
 
 CHANNEL_FILES = [("在线", "在线各类用户.csv"), ("热线", "热线各类用户.csv")]
 
@@ -30,8 +30,7 @@ def run_forecast(fetch: bool = False, out_dir: Path | None = None) -> Path:
         last_date = hist["date"].max()
         future_dates = [last_date + dt.timedelta(days=i)
                         for i in range(1, config.HORIZON + 1)]
-        results[channel] = three_band_forecast(hist, future_dates)
-        sigmas[channel] = backtest_sigma(hist)
+        results[channel], sigmas[channel] = three_band_forecast(hist, future_dates)
         print(f"{channel}: 预测完成，数据截止 {last_date.date()}，未来 {len(future_dates)} 天")
     # 注意: last_date / history_days 取自 for 循环的最后一个渠道(热线)。
     # 两渠道数据截止日/历史天数不同时, 这里只反映热线; 设计评审确认保持原样(与 PeakFlow 一致)。

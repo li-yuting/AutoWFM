@@ -21,7 +21,7 @@ def test_render_dashboard_embeds_forecast_data():
         history = make_history(35)
         future_dates = [dt.datetime(2026, 7, 6) + dt.timedelta(days=i)
                         for i in range(3)]
-        forecast = three_band_forecast(history, future_dates)
+        forecast, _ = three_band_forecast(history, future_dates)
         data = dashboard.build_dashboard_data(
             {"在线": history, "热线": history},
             {"在线": forecast, "热线": forecast},
