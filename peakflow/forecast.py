@@ -13,7 +13,8 @@ def point_forecast(history_df: pd.DataFrame, future_dates: list) -> pd.DataFrame
         sub = history_df[history_df["client_type"] == t].set_index("date").sort_index()
         cv = forecast_client_volume(sub["client_count"], future_dates)
         r_series = sub["inbound"] / sub["client_count"].replace(0, np.nan)
-        rf = forecast_ratio(r_series, future_dates)
+        rf = forecast_ratio(r_series, future_dates,
+                            use_month_seasonal=t in config.MONTH_SEASONAL_TYPES)
         tr = mean_recent_ratio(sub["transfer"] / sub["inbound"].replace(0, np.nan))
         for i, d in enumerate(future_dates):
             inbound = float(cv[i] * rf[i])
@@ -56,7 +57,8 @@ def backtest_sigma(history_df: pd.DataFrame) -> dict:
                 continue
             fv = forecast_client_volume(train["client_count"], [d])[0]
             rs = train["inbound"] / train["client_count"].replace(0, np.nan)
-            fr = forecast_ratio(rs, [d])[0]
+            fr = forecast_ratio(rs, [d],
+                                use_month_seasonal=t in config.MONTH_SEASONAL_TYPES)[0]
             tr = mean_recent_ratio(train["transfer"] / train["inbound"].replace(0, np.nan))
             pred_in = fv * fr
             pred_tr = pred_in * tr
