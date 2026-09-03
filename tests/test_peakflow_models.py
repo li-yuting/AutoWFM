@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from peakflow import models
+from peakflow import config
 from tests.helpers import make_series
 
 
@@ -14,36 +15,64 @@ def _future_dates(series, n=30):
     return [last + dt.timedelta(days=i) for i in range(1, n + 1)]
 
 
-def test_client_volume_basic():
-    s = make_series(70, level=100.0, slope=0.5)
-    out = models.forecast_client_volume(s, _future_dates(s))
-    assert len(out) == 30
-    assert not np.any(np.isnan(out))
-    assert np.all(out >= 0)
+def _future_dates_from(last, n=30):
+    return [last + dt.timedelta(days=i) for i in range(1, n + 1)]
 
 
-def test_client_volume_follows_trend_and_weekday():
-    s = make_series(70, level=100.0, slope=1.0)
-    fd = _future_dates(s)
-    out = models.forecast_client_volume(s, fd)
-    assert out[-1] > out[0]
-    wd = [d.weekday() for d in fd[:7]]
-    sat = fd[wd.index(5)]
-    sun = fd[wd.index(6)]
-    mon = fd[wd.index(0)]
-    o = {d: out[i] for i, d in enumerate(fd)}
-    assert o[mon] > o[sat] and o[mon] > o[sun]
+def _make_history_df(n_days=70, total=1_000_000.0):
+    dates = pd.date_range("2026-06-01", periods=n_days)
+    x = np.linspace(0.0, 1.0, n_days)
+    s_m1 = 0.15 - 0.10 * x           # M1 份额下降
+    s_over = 0.35 + 0.10 * x         # over_30 份额上升
+    s_out = 0.10 - 0.08 * x          # repay_3out 份额下降
+    rest = 1.0 - (s_m1 + s_over + s_out)
+    others = [t for t in config.CLIENT_TYPES if t not in ("M1", "over_30", "repay_3out")]
+    share_of = {"M1": s_m1, "over_30": s_over, "repay_3out": s_out}
+    for t in others:
+        share_of[t] = rest / len(others)
+    rows = []
+    for j, d in enumerate(dates):
+        for t in config.CLIENT_TYPES:
+            rows.append({"date": d, "client_type": t,
+                         "client_count": total * share_of[t][j]})
+    return pd.DataFrame(rows)
 
 
-def test_client_volume_short_history_raises():
-    s = make_series(10, level=100.0)
-    raised = False
-    try:
-        models.forecast_client_volume(s, _future_dates(s))
-    except ValueError as e:
-        assert "历史不足" in str(e)
-        raised = True
-    assert raised, "Expected ValueError was not raised"
+def test_client_volumes_conservation():
+    df = _make_history_df()
+    fd = _future_dates_from(df["date"].max())
+    vols = models.forecast_client_volumes(df, fd)
+    total_flat = df.groupby("date")["client_count"].sum().iloc[-config.TOTAL_WINDOW:].mean()
+    for i in range(len(fd)):
+        s = sum(vols[t][i] for t in config.CLIENT_TYPES)
+        assert abs(s - total_flat) < 1e-6, f"day {i} 总量不守恒: {s} vs {total_flat}"
+
+
+def test_client_volumes_non_negative_and_keys():
+    df = _make_history_df()
+    fd = _future_dates_from(df["date"].max())
+    vols = models.forecast_client_volumes(df, fd)
+    assert set(vols.keys()) == set(config.CLIENT_TYPES)
+    for t in config.CLIENT_TYPES:
+        assert len(vols[t]) == len(fd)
+        assert np.all(vols[t] >= 0)
+
+
+def test_client_volumes_declining_share_stays_positive():
+    df = _make_history_df()
+    fd = _future_dates_from(df["date"].max())
+    vols = models.forecast_client_volumes(df, fd)
+    # repay_3out 份额持续下降: 客户量不应塌缩到 0, 且整体递减
+    assert np.all(vols["repay_3out"] > 0)
+    assert vols["repay_3out"][-5:].mean() < vols["repay_3out"][:5].mean()
+
+
+def test_client_volumes_rising_share():
+    df = _make_history_df()
+    fd = _future_dates_from(df["date"].max())
+    vols = models.forecast_client_volumes(df, fd)
+    # over_30 份额上升: 客户量应递增
+    assert vols["over_30"][-5:].mean() > vols["over_30"][:5].mean()
 
 
 def test_ratio_basic():
@@ -88,9 +117,10 @@ def test_mean_recent_ratio_clamps():
 
 
 def main():
-    test_client_volume_basic()
-    test_client_volume_follows_trend_and_weekday()
-    test_client_volume_short_history_raises()
+    test_client_volumes_conservation()
+    test_client_volumes_non_negative_and_keys()
+    test_client_volumes_declining_share_stays_positive()
+    test_client_volumes_rising_share()
     test_ratio_basic()
     test_ratio_decreasing_trend()
     test_ratio_short_history_falls_back_to_last()

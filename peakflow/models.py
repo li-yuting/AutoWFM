@@ -45,18 +45,27 @@ def _extrapolate(trend: pd.Series, horizon: int) -> np.ndarray:
     return intercept + slope * xf
 
 
-def forecast_client_volume(series: pd.Series, future_dates: list) -> np.ndarray:
-    """客户量：趋势+周季节分解外推。返回长度=len(future_dates)、值>=0 的数组。"""
-    s = series.dropna()
-    if len(s) < 21:
-        raise ValueError(f"客户量历史不足({len(s)} 天)，需要至少 21 天")
-    s = s.sort_index()
-    trend = _trend_tail(s)
-    sidx = _seasonal_index(s, trend)
-    tf = _extrapolate(trend, len(future_dates))
-    out = np.array([tf[i] + sidx.get(future_dates[i].weekday(), 0.0)
-                    for i in range(len(future_dates))])
-    return np.maximum(out, 0.0)
+def forecast_client_volumes(history_df: pd.DataFrame, future_dates: list) -> dict[str, np.ndarray]:
+    """客户量预测：flat 总量 × 份额(forecast_ratio + 归一化)。
+
+    返回 {client_type: np.ndarray(len(future_dates))}，值 >= 0；总量守恒。
+    """
+    total = history_df.groupby("date")["client_count"].sum().sort_index()
+    recent = total.iloc[-config.TOTAL_WINDOW:]
+    if len(recent) == 0 or recent.mean() <= 0:
+        return {t: np.zeros(len(future_dates)) for t in config.CLIENT_TYPES}
+    flat = float(recent.mean())
+    shares = {}
+    for t in config.CLIENT_TYPES:
+        sub = history_df[history_df["client_type"] == t].set_index("date").sort_index()
+        share = sub["client_count"].divide(total).replace([np.inf, -np.inf], np.nan)
+        shares[t] = forecast_ratio(share, future_dates, use_month_seasonal=False)
+    out = {t: np.empty(len(future_dates)) for t in config.CLIENT_TYPES}
+    for i in range(len(future_dates)):
+        s = sum(shares[t][i] for t in config.CLIENT_TYPES)
+        for t in config.CLIENT_TYPES:
+            out[t][i] = flat * (shares[t][i] / s) if s > 0 else 0.0
+    return out
 
 
 def forecast_ratio(series: pd.Series, future_dates: list,
