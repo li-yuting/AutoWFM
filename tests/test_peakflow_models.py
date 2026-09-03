@@ -75,6 +75,18 @@ def test_client_volumes_rising_share():
     assert vols["over_30"][-5:].mean() > vols["over_30"][:5].mean()
 
 
+def test_client_volumes_zero_total_fallback():
+    # 客户量全 0 时走兜底, 返回全 0 且长度正确, 不崩
+    df = _make_history_df()
+    df["client_count"] = 0.0
+    fd = _future_dates_from(df["date"].max())
+    vols = models.forecast_client_volumes(df, fd)
+    for t in config.CLIENT_TYPES:
+        assert len(vols[t]) == len(fd)
+        assert np.all(vols[t] == 0.0)
+
+
+
 def test_ratio_basic():
     s = make_series(70, level=1000.0, slope=0.0)
     r = (0.05 + s / s.max() * 0.02)  # 约 0.05~0.07，正数
@@ -121,6 +133,7 @@ def main():
     test_client_volumes_non_negative_and_keys()
     test_client_volumes_declining_share_stays_positive()
     test_client_volumes_rising_share()
+    test_client_volumes_zero_total_fallback()
     test_ratio_basic()
     test_ratio_decreasing_trend()
     test_ratio_short_history_falls_back_to_last()

@@ -64,7 +64,7 @@ def forecast_client_volumes(history_df: pd.DataFrame, future_dates: list) -> dic
 ## 4. 边界与错误处理
 
 - 总量为 0 或近期窗口为空：返回全 0。
-- 某类型份额全 0：`forecast_ratio` 内部对 `s[s>0]` 为空时返回 0，归一化后仍为 0。
+- 某类型份额全 0：`forecast_ratio` 对 `s[s>0]` 为空时返回 0，但后续 `exp→clip` 路径保证份额预测下限为 `1e-9`（非负正数），归一化后该类型客户量 ≈ `flat × 1e-9`（极小正数，非恰好 0）。
 - 归一化分母为 0（所有份额预测均为 0）：该日各类型 client volume 置 0。
 - `share` 与 `total` 按日期对齐（pandas Series 相除自动对齐），NaN 由 `forecast_ratio` 的 `dropna` 处理。
 
