@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from peakflow.models import forecast_ratio
+from peakflow.forecast import _uses_month_seasonal
 
 
 def _month_spike_ratio(dates):
@@ -48,8 +49,36 @@ def test_month_seasonal_disabled_under_min_months():
     assert np.allclose(on, off), "不足 DOM_MIN_MONTHS 时应退化为无日序项"
 
 
+def test_uses_month_seasonal_gating():
+    assert _uses_month_seasonal("M2-M3") is True
+    assert _uses_month_seasonal("M3+") is True
+    assert _uses_month_seasonal("M1") is False
+    assert _uses_month_seasonal("购买过权益卡且未逾期") is False
+
+
+def test_forecast_ratio_backward_compat():
+    dates = pd.date_range("2026-01-01", "2026-03-31", freq="D")
+    s = _month_spike_ratio(dates)
+    future = pd.date_range("2026-04-01", "2026-04-30", freq="D")
+    explicit = forecast_ratio(s, future, use_month_seasonal=False)
+    default = forecast_ratio(s, future)
+    assert np.array_equal(explicit, default)
+
+
+def test_forecast_ratio_short_history_with_flag_falls_back():
+    dates = pd.date_range("2026-01-01", "2026-01-10", freq="D")  # 10 天 < 21
+    s = _month_spike_ratio(dates)
+    future = [pd.Timestamp("2026-01-11"), pd.Timestamp("2026-01-12")]
+    on = forecast_ratio(s, future, use_month_seasonal=True)
+    off = forecast_ratio(s, future, use_month_seasonal=False)
+    assert np.array_equal(on, off)
+
+
 if __name__ == "__main__":
     test_month_seasonal_early_gt_late()
     test_month_seasonal_flat_on_equals_off()
     test_month_seasonal_disabled_under_min_months()
+    test_uses_month_seasonal_gating()
+    test_forecast_ratio_backward_compat()
+    test_forecast_ratio_short_history_with_flag_falls_back()
     print("OK: all peakflow month-seasonality tests passed")

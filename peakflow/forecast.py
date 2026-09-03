@@ -7,6 +7,11 @@ from peakflow import config
 from peakflow.models import forecast_client_volume, forecast_ratio, mean_recent_ratio
 
 
+def _uses_month_seasonal(client_type: str) -> bool:
+    """该客户类型是否启用月内日序季节项(仅 M2-M3/M3+ 等账龄类型)。"""
+    return client_type in config.MONTH_SEASONAL_TYPES
+
+
 def point_forecast(history_df: pd.DataFrame, future_dates: list) -> pd.DataFrame:
     rows = []
     for t in config.CLIENT_TYPES:
@@ -14,7 +19,7 @@ def point_forecast(history_df: pd.DataFrame, future_dates: list) -> pd.DataFrame
         cv = forecast_client_volume(sub["client_count"], future_dates)
         r_series = sub["inbound"] / sub["client_count"].replace(0, np.nan)
         rf = forecast_ratio(r_series, future_dates,
-                            use_month_seasonal=t in config.MONTH_SEASONAL_TYPES)
+                            use_month_seasonal=_uses_month_seasonal(t))
         tr = mean_recent_ratio(sub["transfer"] / sub["inbound"].replace(0, np.nan))
         for i, d in enumerate(future_dates):
             inbound = float(cv[i] * rf[i])
@@ -58,7 +63,7 @@ def backtest_sigma(history_df: pd.DataFrame) -> dict:
             fv = forecast_client_volume(train["client_count"], [d])[0]
             rs = train["inbound"] / train["client_count"].replace(0, np.nan)
             fr = forecast_ratio(rs, [d],
-                                use_month_seasonal=t in config.MONTH_SEASONAL_TYPES)[0]
+                                use_month_seasonal=_uses_month_seasonal(t))[0]
             tr = mean_recent_ratio(train["transfer"] / train["inbound"].replace(0, np.nan))
             pred_in = fv * fr
             pred_tr = pred_in * tr
