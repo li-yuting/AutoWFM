@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from peakflow import config
-from peakflow.models import forecast_client_volume, forecast_ratio, mean_recent_ratio
+from peakflow.models import forecast_client_volumes, forecast_ratio, mean_recent_ratio
 
 
 def _uses_month_seasonal(client_type: str) -> bool:
@@ -13,10 +13,11 @@ def _uses_month_seasonal(client_type: str) -> bool:
 
 
 def point_forecast(history_df: pd.DataFrame, future_dates: list) -> pd.DataFrame:
+    cvs = forecast_client_volumes(history_df, future_dates)
     rows = []
     for t in config.CLIENT_TYPES:
         sub = history_df[history_df["client_type"] == t].set_index("date").sort_index()
-        cv = forecast_client_volume(sub["client_count"], future_dates)
+        cv = cvs[t]
         r_series = sub["inbound"] / sub["client_count"].replace(0, np.nan)
         rf = forecast_ratio(r_series, future_dates,
                             use_month_seasonal=_uses_month_seasonal(t))
@@ -54,16 +55,21 @@ def backtest_sigma(history_df: pd.DataFrame) -> dict:
     res_tr = {t: [] for t in config.CLIENT_TYPES}
     mape_num = {t: [] for t in config.CLIENT_TYPES}
     mape_den = {t: [] for t in config.CLIENT_TYPES}
-    for t in config.CLIENT_TYPES:
-        sub = history_df[history_df["client_type"] == t].set_index("date").sort_index()
-        for d in back:
+    sub_by_type = {t: history_df[history_df["client_type"] == t].set_index("date").sort_index()
+                   for t in config.CLIENT_TYPES}
+    for d in back:
+        train_df = history_df[history_df["date"] < d]
+        if train_df["date"].nunique() < 21:
+            continue
+        cvs = forecast_client_volumes(train_df, [d])
+        for t in config.CLIENT_TYPES:
+            sub = sub_by_type[t]
             train = sub[sub.index < d]
             if len(train) < 21:
                 continue
-            fv = forecast_client_volume(train["client_count"], [d])[0]
+            fv = cvs[t][0]
             rs = train["inbound"] / train["client_count"].replace(0, np.nan)
-            fr = forecast_ratio(rs, [d],
-                                use_month_seasonal=_uses_month_seasonal(t))[0]
+            fr = forecast_ratio(rs, [d], use_month_seasonal=_uses_month_seasonal(t))[0]
             tr = mean_recent_ratio(train["transfer"] / train["inbound"].replace(0, np.nan))
             pred_in = fv * fr
             pred_tr = pred_in * tr
