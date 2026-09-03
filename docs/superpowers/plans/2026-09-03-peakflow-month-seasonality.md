@@ -90,6 +90,9 @@ git commit -m "feat(peakflow): 增加月内日序季节配置项" -- peakflow/co
 ```python
 from __future__ import annotations
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import numpy as np
 import pandas as pd
 
