@@ -19,6 +19,13 @@ def _seasonal_index(series: pd.Series, trend: pd.Series) -> pd.Series:
     return tmp.groupby("wd")["v"].mean()
 
 
+def _dom_seasonal_index(resid: pd.Series, window: int) -> pd.Series:
+    """按「几号(1-31)」对残差取均值，再做 window 天中心平滑(边缘缩窗)。"""
+    tmp = pd.DataFrame({"v": resid.values, "dom": resid.index.day})
+    idx = tmp.groupby("dom")["v"].mean().reindex(range(1, 32))
+    return idx.rolling(window, center=True, min_periods=1).mean().ffill().bfill()
+
+
 def _extrapolate(trend: pd.Series, horizon: int) -> np.ndarray:
     """对趋势尾部 TREND_FIT_DAYS 天线性拟合外推 horizon 步。"""
     n = len(trend)
@@ -52,8 +59,12 @@ def forecast_client_volume(series: pd.Series, future_dates: list) -> np.ndarray:
     return np.maximum(out, 0.0)
 
 
-def forecast_ratio(series: pd.Series, future_dates: list) -> np.ndarray:
-    """咨询占比：对 log(r) 做趋势+周季节分解外推，再 exp。返回 (0,1] 数组。"""
+def forecast_ratio(series: pd.Series, future_dates: list,
+                   use_month_seasonal: bool = False) -> np.ndarray:
+    """咨询占比：对 log(r) 做趋势+周季节分解外推，再 exp。返回 (0,1] 数组。
+
+    use_month_seasonal=True 时叠加月内日序季节项(仅 M2-M3/M3+ 等账龄类型)。
+    """
     s = series.dropna()
     s = s[s > 0]
     if len(s) < 21:
@@ -64,9 +75,22 @@ def forecast_ratio(series: pd.Series, future_dates: list) -> np.ndarray:
     trend = _trend_tail(ls)
     sidx = _seasonal_index(ls, trend)
     tf = _extrapolate(trend, len(future_dates))
-    out = np.exp(np.array([tf[i] + sidx.get(future_dates[i].weekday(), 0.0)
-                           for i in range(len(future_dates))]))
-    return np.clip(out, 1e-9, 1.0)
+    dom_idx = None
+    if use_month_seasonal:
+        n_months = s.index.to_period("M").nunique()
+        if n_months >= config.DOM_MIN_MONTHS:
+            wd = pd.Series([sidx.get(d.weekday(), 0.0) for d in ls.index],
+                           index=ls.index)
+            resid = ls - trend - wd
+            dom_idx = _dom_seasonal_index(resid, config.DOM_SMOOTH_WINDOW)
+    out = np.empty(len(future_dates))
+    for i in range(len(future_dates)):
+        d = future_dates[i]
+        v = tf[i] + sidx.get(d.weekday(), 0.0)
+        if dom_idx is not None:
+            v += float(dom_idx.get(d.day, 0.0))
+        out[i] = v
+    return np.clip(np.exp(out), 1e-9, 1.0)
 
 
 def mean_recent_ratio(series: pd.Series, window: int | None = None) -> float:
