@@ -249,6 +249,37 @@ def _looks_blank(path, bands=6):
         return False
 
 
+# 截图就绪等待(秒)与超时后兜底固定等待(毫秒,即旧行为的 5 秒)
+READY_TIMEOUT = 20
+FALLBACK_WAIT_MS = 5000
+
+
+def _wait_ready(pg, timeout=READY_TIMEOUT):
+    """等待看板就绪信号 body[data-ready]=1(全部图表动画完成);超时退化为固定等待并返回 False。
+
+    只捕获 Playwright TimeoutError(旧版看板无信号属预期降级);其他异常向上抛。"""
+    try:
+        from playwright.sync_api import TimeoutError as PwTimeout
+        pg.wait_for_function("document.body && document.body.dataset.ready === '1'",
+                             timeout=timeout * 1000)
+        return True
+    except PwTimeout:
+        log.warning(f"[截图] 就绪信号超时({timeout}s),退化为固定等待 {FALLBACK_WAIT_MS}ms")
+        pg.wait_for_timeout(FALLBACK_WAIT_MS)
+        return False
+
+
+def _warm_raster(pg):
+    """滚动到底再回顶,预热长页面光栅化(防全页截图出现未渲染条带);失败仅记日志。"""
+    try:
+        pg.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        pg.wait_for_timeout(300)
+        pg.evaluate("window.scrollTo(0, 0)")
+        pg.wait_for_timeout(200)
+    except Exception as e:
+        log.warning(f"[截图] 光栅化预热失败(忽略): {e}")
+
+
 def take_screenshot(url, dash_token=None):
     """Playwright 截图 -> data/screenshot.png;失败返回 None。
     dash_token 非空时带 Authorization: Bearer header(看板启用认证后必需)。"""

@@ -152,6 +152,54 @@ def test_looks_blank():
     assert notify._looks_blank(bad) is False, "坏文件 fail-open"
     print("looks_blank OK")
 
+def test_wait_ready():
+    from playwright.sync_api import TimeoutError as PwTimeout
+
+    class _PgOk:
+        def wait_for_function(self, expr, timeout=None):
+            assert "dataset.ready" in expr, expr
+            return True
+    assert notify._wait_ready(_PgOk(), timeout=1) is True
+
+    class _PgTimeout:
+        def __init__(self):
+            self.waited = []
+        def wait_for_function(self, expr, timeout=None):
+            raise PwTimeout("timeout")
+        def wait_for_timeout(self, ms):
+            self.waited.append(ms)
+    pg = _PgTimeout()
+    assert notify._wait_ready(pg, timeout=1) is False
+    assert pg.waited == [notify.FALLBACK_WAIT_MS], "超时后应固定兜底等待"
+
+    class _PgBoom:
+        def wait_for_function(self, expr, timeout=None):
+            raise RuntimeError("browser gone")
+    try:
+        notify._wait_ready(_PgBoom(), timeout=1)
+        assert False, "非超时异常应向上抛"
+    except RuntimeError:
+        pass
+    print("wait_ready OK")
+
+def test_warm_raster():
+    calls = []
+    class _Pg:
+        def evaluate(self, js):
+            calls.append(js)
+        def wait_for_timeout(self, ms):
+            calls.append(ms)
+    notify._warm_raster(_Pg())
+    assert len(calls) == 4, calls          # scrollTo底 + 300ms + scrollTo顶 + 200ms
+    assert "scrollTo" in calls[0] and "scrollTo" in calls[2]
+    class _PgBad:
+        def evaluate(self, js):
+            raise RuntimeError("no dom")
+        def wait_for_timeout(self, ms):
+            pass
+    notify._warm_raster(_PgBad())          # 异常应被吞掉,不抛
+    print("warm_raster OK")
+
 def _capture_alerts(cfg, now):
     calls = []
     with patch.object(notify, "_send_text", lambda key, mob, msg: calls.append((key, mob, msg)) or "ok"):
@@ -348,6 +396,8 @@ def main():
     test_send_img_missing_file()
     test_take_screenshot_failure()
     test_looks_blank()
+    test_wait_ready()
+    test_warm_raster()
     test_check_alerts_hotline()
     test_check_alerts_online()
     test_check_alerts_12378()
