@@ -290,11 +290,13 @@ function buildChart(canvasId, name, group, kind){
   if(hasLine) scales.yRight = c.scales.yRight;
   var el = document.getElementById(canvasId);
   if(!el) return null;
+  _pendingCharts++;
   return new Chart(el.getContext('2d'), {
     type:'bar',
     data:{ labels:a.labels, datasets:datasets },
     options:{
       responsive:true, maintainAspectRatio:false,
+      animation:{ onComplete:_chartDone },
       interaction:{ mode:'index', intersect:false },
       plugins:{ legend:c.legend, tooltip:{ mode:'index', intersect:false } },
       scales:scales
@@ -302,16 +304,24 @@ function buildChart(canvasId, name, group, kind){
   });
 }
 
+/* ===== 截图就绪信号:所有图表动画完成 -> body[data-ready]=1(collector 截图据此等待) ===== */
+var _pendingCharts = 0;
+function _chartDone(){
+  if(--_pendingCharts <= 0){ _pendingCharts = 0; document.body.dataset.ready = "1"; }
+}
+
 var CHARTS = [];
 function renderAll(){
   CHARTS.forEach(function(ch){ if(ch) ch.destroy(); });
   CHARTS = [];
+  _pendingCharts = 0;
   Object.keys(INBOUND).forEach(function(name){
     CHARTS.push(buildChart('chart_in_' + name, name, INBOUND[name], 'in'));
   });
   Object.keys(OUTBOUND).forEach(function(name){
     CHARTS.push(buildChart('chart_out_' + name, name, OUTBOUND[name], 'out'));
   });
+  if(_pendingCharts === 0) document.body.dataset.ready = "1";   /* 无图表时直接就绪 */
 }
 
 /* ===== 一键切亮/暗：翻转 data-theme，重建图表拾取新色，记 localStorage ===== */

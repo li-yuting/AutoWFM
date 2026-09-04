@@ -25,10 +25,18 @@ def test_template_compiles():
     from dashboard.app import app
     app.jinja_env.get_template("dashboard.html")   # 编译(不渲染),捕获 Jinja 语法错误
 
+def test_ready_signal_wired():
+    with open(_TPL, encoding="utf-8") as f:
+        src = f.read()
+    assert "_pendingCharts" in src and "_chartDone" in src, "就绪信号计数器缺失"
+    assert "onComplete:_chartDone" in src, "图表动画完成回调未接线"
+    assert 'dataset.ready = "1"' in src, "body[data-ready] 置位逻辑缺失"
+
 def main():
     test_chartjs_vendored()
     test_template_no_cdn()
     test_template_compiles()
+    test_ready_signal_wired()
     print("ALL dashboard static tests OK")
 
 if __name__ == "__main__":
