@@ -46,7 +46,7 @@ function _chartDone(){ if(--_pendingCharts <= 0) document.body.dataset.ready = "
 
 - **`_wait_ready(pg, timeout=20)`**：`pg.wait_for_function("document.body && document.body.dataset.ready === '1'", timeout=timeout*1000)`；只捕获 Playwright `TimeoutError`（其他异常放行给外层），超时返回 False 并退回固定 5 秒等待（兼容"采集端已升级、看板未升级"的部署窗口）。
 - **`_warm_raster(pg)`**：滚动到底 → 300ms → 回顶 → 200ms，预热长页面光栅化，防"半白"条带。
-- **`_looks_blank(path, bands=6, ratio=0.995)`**：Pillow 灰度化后按水平条带统计主色占比，任一条带 ≥99.5% 同色判空白；Pillow 出错返回 False（fail-open：检测不了就放行）。
+- **`_looks_blank(path, bands=6)`**：Pillow 灰度化后按水平条带统计灰度级数，任一条带 ≤4 个灰度级判空白。未渲染区域呈纯色（1 个级）；正常条带必含文字/图表的抗锯齿灰阶（远超 4 级）。不用主色占比阈值：仅含标题的条带非主色像素可低于 0.5%，会误杀好图。Pillow 出错返回 False（fail-open：检测不了就放行）。
 
 主流程：
 
