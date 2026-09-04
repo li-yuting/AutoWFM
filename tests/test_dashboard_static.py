@@ -20,6 +20,7 @@ def test_template_no_cdn():
         src = f.read()
     assert "cdn.jsdelivr.net" not in src, "模板不得引用公网 CDN"
     assert "chart.umd.min.js" in src, "模板应引用本地 Chart.js"
+    assert "http://" not in src and "https://" not in src, "模板不得引用任何外部 URL"
 
 def test_template_compiles():
     from dashboard.app import app
@@ -31,6 +32,7 @@ def test_ready_signal_wired():
     assert "_pendingCharts" in src and "_chartDone" in src, "就绪信号计数器缺失"
     assert "onComplete:_chartDone" in src, "图表动画完成回调未接线"
     assert 'dataset.ready = "1"' in src, "body[data-ready] 置位逻辑缺失"
+    assert "_pendingCharts++" in src, "buildChart 未递增图表计数"
 
 def main():
     test_chartjs_vendored()

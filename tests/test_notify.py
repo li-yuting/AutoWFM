@@ -150,6 +150,11 @@ def test_looks_blank():
     with open(bad, "wb") as f:
         f.write(b"not a png")
     assert notify._looks_blank(bad) is False, "坏文件 fail-open"
+    tiny = os.path.join(d, "tiny.png")
+    # h=2 < bands=6 -> band_h=1, i>=2 走 top>=bottom continue 分支。
+    # 宽度须 >4 像素:条带灰度级数上限=宽度,3 宽必然 <=4 级被判空白(算法设计如此)。
+    Image.fromarray(np.random.default_rng(11).integers(0, 256, (2, 60, 3), dtype=np.uint8)).save(tiny)
+    assert notify._looks_blank(tiny) is False, "60x2 噪点图不应判空白(h<bands 覆盖 top>=bottom continue 分支)"
     print("looks_blank OK")
 
 def test_wait_ready():
@@ -158,18 +163,24 @@ def test_wait_ready():
     class _PgOk:
         def wait_for_function(self, expr, timeout=None):
             assert "dataset.ready" in expr, expr
+            self.got = timeout
             return True
-    assert notify._wait_ready(_PgOk(), timeout=1) is True
+    ok = _PgOk()
+    assert notify._wait_ready(ok, timeout=1) is True
+    assert ok.got == 1000, ok.got   # 秒->毫秒换算不得丢失
 
     class _PgTimeout:
         def __init__(self):
             self.waited = []
+            self.got = None
         def wait_for_function(self, expr, timeout=None):
+            self.got = timeout
             raise PwTimeout("timeout")
         def wait_for_timeout(self, ms):
             self.waited.append(ms)
     pg = _PgTimeout()
     assert notify._wait_ready(pg, timeout=1) is False
+    assert pg.got == 1000, pg.got
     assert pg.waited == [notify.FALLBACK_WAIT_MS], "超时后应固定兜底等待"
 
     class _PgBoom:
