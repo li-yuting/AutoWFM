@@ -281,7 +281,10 @@ def _warm_raster(pg):
 
 
 def take_screenshot(url, dash_token=None):
-    """Playwright 截图 -> data/screenshot.png;失败返回 None。
+    """Playwright 截图 -> data/screenshot.png;失败或两轮均疑似空白返回 None。
+
+    每轮:goto(networkidle) -> 等就绪信号(超时退化固定 5s)-> 光栅化预热 -> 全页截图
+    -> 空白检测;疑似空白重载重试 1 次,仍坏放弃(调用方只发 markdown,日志留痕)。
     dash_token 非空时带 Authorization: Bearer header(看板启用认证后必需)。"""
     try:
         from playwright.sync_api import sync_playwright
@@ -293,16 +296,20 @@ def take_screenshot(url, dash_token=None):
                 pg = b.new_page(viewport={"width": 1920, "height": 1080})
                 if dash_token:
                     pg.set_extra_http_headers({"Authorization": f"Bearer {dash_token}"})
-                pg.goto(url, wait_until="networkidle", timeout=30000)
-                pg.wait_for_timeout(5000)   # 等 Chart.js 渲染(本看板无 updateTime 标记)
-                pg.screenshot(path=path, full_page=True)
-                log.info(f"截图已保存: {path}")
-                return path
+                for attempt in (1, 2):
+                    pg.goto(url, wait_until="networkidle", timeout=30000)
+                    ready = _wait_ready(pg)
+                    _warm_raster(pg)
+                    pg.screenshot(path=path, full_page=True)
+                    if not _looks_blank(path):
+                        log.info(f"截图已保存: {path}(第{attempt}次,就绪信号={'已' if ready else '未'}确认)")
+                        return path
+                    log.warning(f"[截图] 第{attempt}次截图疑似空白,{'重载重试' if attempt == 1 else '放弃发送'}")
             finally:
                 b.close()
     except Exception as e:
         log.error(f"截图失败: {e}")
-        return None
+    return None
 
 
 def check_alerts(cfg, now=None):

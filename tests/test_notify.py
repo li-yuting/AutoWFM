@@ -200,6 +200,50 @@ def test_warm_raster():
     notify._warm_raster(_PgBad())          # 异常应被吞掉,不抛
     print("warm_raster OK")
 
+def test_take_screenshot_retry():
+    # 注意:本测试会写 data/screenshot.png(已 gitignore,且每次推送都会重新生成,可覆盖)
+    from PIL import Image
+    import numpy as np
+    d = _tmp()
+    solid = os.path.join(d, "solid.png")
+    Image.new("RGB", (60, 60), (11, 15, 23)).save(solid)
+    noisy = os.path.join(d, "noisy.png")
+    Image.fromarray(np.random.default_rng(9).integers(0, 256, (60, 60, 3), dtype=np.uint8)).save(noisy)
+
+    def _fake_page(shots):
+        # shots: 每次 screenshot 依次拷入目标路径的源文件列表(模拟第1轮空白/第2轮正常)
+        class _Pg:
+            def __init__(self):
+                self.goto_calls = 0
+            def set_extra_http_headers(self, h): pass
+            def goto(self, *a, **k): self.goto_calls += 1
+            def wait_for_function(self, *a, **k): return True
+            def wait_for_timeout(self, ms): pass
+            def evaluate(self, js): pass
+            def screenshot(self, path=None, full_page=False):
+                shutil.copyfile(shots.pop(0), path)
+        return _Pg()
+
+    def _fake_sync_pw(pg):
+        pw = MagicMock()
+        pw.__enter__.return_value = pw
+        pw.chromium.launch.return_value = MagicMock(new_page=lambda **k: pg, close=lambda: None)
+        return pw
+
+    # 第1轮截出空白图 -> 重载重试 -> 第2轮正常 -> 返回路径
+    pg1 = _fake_page([solid, noisy])
+    with patch("playwright.sync_api.sync_playwright", return_value=_fake_sync_pw(pg1)):
+        res = notify.take_screenshot("http://x/")
+    assert res is not None and pg1.goto_calls == 2, (res, pg1.goto_calls)
+    assert Path("data/screenshot.png").exists()
+
+    # 两轮均空白 -> 放弃,返回 None
+    pg2 = _fake_page([solid, solid])
+    with patch("playwright.sync_api.sync_playwright", return_value=_fake_sync_pw(pg2)):
+        assert notify.take_screenshot("http://x/") is None
+    assert pg2.goto_calls == 2
+    print("take_screenshot_retry OK")
+
 def _capture_alerts(cfg, now):
     calls = []
     with patch.object(notify, "_send_text", lambda key, mob, msg: calls.append((key, mob, msg)) or "ok"):
@@ -398,6 +442,7 @@ def main():
     test_looks_blank()
     test_wait_ready()
     test_warm_raster()
+    test_take_screenshot_retry()
     test_check_alerts_hotline()
     test_check_alerts_online()
     test_check_alerts_12378()
