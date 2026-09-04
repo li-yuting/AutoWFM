@@ -224,6 +224,31 @@ def _check_stall_alert(now_str, date_str, data_dir, alert, rcpt, wh):
             _STALL_ALERTED.discard(src)
 
 
+def _looks_blank(path, bands=6):
+    """截图是否疑似空白:灰度后按水平条带统计灰度级数,任一条带 <=4 级判空白。
+
+    未渲染区域呈纯色(1 级);正常条带必含文字/图表抗锯齿灰阶(远超 4 级)。
+    Pillow 任何异常 -> False(fail-open:检测不了就放行,宁漏勿误杀)。"""
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("L")
+        w, h = im.size
+        if not w or not h:
+            return False
+        band_h = max(1, h // bands)
+        for i in range(bands):
+            top, bottom = i * band_h, min((i + 1) * band_h, h)
+            if top >= bottom:
+                continue
+            colors = im.crop((0, top, w, bottom)).getcolors(maxcolors=4096)
+            if colors is not None and len(colors) <= 4:
+                return True
+        return False
+    except Exception as e:
+        log.warning(f"[截图] 空白检测异常(fail-open): {e}")
+        return False
+
+
 def take_screenshot(url, dash_token=None):
     """Playwright 截图 -> data/screenshot.png;失败返回 None。
     dash_token 非空时带 Authorization: Bearer header(看板启用认证后必需)。"""

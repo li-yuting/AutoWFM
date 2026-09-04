@@ -131,6 +131,27 @@ def test_take_screenshot_failure():
         assert notify.take_screenshot("http://localhost:5001/") is None
     print("take_screenshot_failure OK")
 
+def test_looks_blank():
+    from PIL import Image
+    import numpy as np
+    d = _tmp()
+    solid = os.path.join(d, "solid.png")
+    Image.new("RGB", (60, 60), (10, 15, 23)).save(solid)
+    assert notify._looks_blank(solid) is True, "纯色图应判空白"
+    noisy = os.path.join(d, "noisy.png")
+    Image.fromarray(np.random.default_rng(7).integers(0, 256, (60, 60, 3), dtype=np.uint8)).save(noisy)
+    assert notify._looks_blank(noisy) is False, "噪点图不应判空白"
+    half = os.path.join(d, "half.png")
+    im = Image.fromarray(np.random.default_rng(8).integers(0, 256, (60, 60, 3), dtype=np.uint8))
+    im.paste((10, 15, 23), (0, 30, 60, 60))
+    im.save(half)
+    assert notify._looks_blank(half) is True, "下半纯色应判空白(条带逻辑)"
+    bad = os.path.join(d, "bad.png")
+    with open(bad, "wb") as f:
+        f.write(b"not a png")
+    assert notify._looks_blank(bad) is False, "坏文件 fail-open"
+    print("looks_blank OK")
+
 def _capture_alerts(cfg, now):
     calls = []
     with patch.object(notify, "_send_text", lambda key, mob, msg: calls.append((key, mob, msg)) or "ok"):
@@ -326,6 +347,7 @@ def main():
     test_send_img_payload()
     test_send_img_missing_file()
     test_take_screenshot_failure()
+    test_looks_blank()
     test_check_alerts_hotline()
     test_check_alerts_online()
     test_check_alerts_12378()
