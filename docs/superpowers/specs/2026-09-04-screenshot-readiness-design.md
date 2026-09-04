@@ -71,7 +71,7 @@ function _chartDone(){ if(--_pendingCharts <= 0) document.body.dataset.ready = "
 | 空白检测自身异常 | fail-open（返回"非空白"） |
 | 两轮都空白 / 浏览器异常 | 返回 None，只发 markdown，日志 warning/error |
 | 部署顺序 | 看板/采集端任意先后升级均可用（信号是可选增强） |
-| 最坏耗时 | ~1 分钟内（goto 30s + 信号 20s + 兜底 5s + 截图），push_job 独立线程，markdown 先发不受影响 |
+| 最坏耗时 | ~2 分钟内（两轮全超时：每轮 goto 30s + 信号 20s + 兜底 5s + 截图），push_job 独立线程，markdown 先发不受影响 |
 
 ### 4. 测试
 
