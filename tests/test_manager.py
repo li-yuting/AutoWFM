@@ -427,6 +427,34 @@ def test_ui_auto_start_checkboxes():
     print("ui_auto_start_checkboxes OK")
 
 
+def test_ui_toggle_resets_breaker():
+    """熔断后重新勾选自启动:复位失败计数与告警去重,恢复自动调度;取消勾选不动计数。"""
+    _TMP.mkdir(exist_ok=True)
+    state_path = _TMP / "ui_toggle_state.json"
+    state_path.unlink(missing_ok=True)
+    with patch("manager.AUTO_START_STATE", state_path):
+        with patch.object(ManagerUI, "_build_tray", lambda self: None), \
+             patch.object(ManagerUI, "_refresh", lambda self: None):
+            root = tk.Tk(); root.withdraw()
+            ui = ManagerUI(root, _cfg())
+            try:
+                task = ui.tasks[0]
+                task.restart_failures = 3
+                task.popup_shown = True
+                ui._auto_start_vars["采集器"].set(False)
+                ui._toggle_auto_start(task)      # 取消勾选:不动计数
+                assert task.restart_failures == 3, "取消勾选不应复位计数"
+                ui._auto_start_vars["采集器"].set(True)
+                ui._toggle_auto_start(task)      # 重新勾上:复位熔断
+                assert task.auto_start is True
+                assert task.restart_failures == 0, "重新勾选应复位失败计数"
+                assert task.popup_shown is False, "重新勾选应复位告警去重"
+            finally:
+                root.destroy()
+    state_path.unlink(missing_ok=True)
+    print("ui_toggle_resets_breaker OK")
+
+
 def main():
     test_auto_start_weekday()
     test_auto_start_weekend()
@@ -454,6 +482,7 @@ def main():
     test_tick_auto_start_requires_checkbox()
     test_auto_start_state_roundtrip()
     test_ui_auto_start_checkboxes()
+    test_ui_toggle_resets_breaker()
     print("ALL manager tests OK")
 
 

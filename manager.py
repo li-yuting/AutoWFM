@@ -1,13 +1,12 @@
 """AutoWFM 桌面管理器。
 
-管理采集器(`collector.main`)与看板(`dashboard.app`)两个子进程:
-- 自动启停:每天到采集器最早窗口(工作日 08:30 / 周末 09:00,从 config.yaml 推导)启动,
-  到全局窗口结束(21:00)停止。
-- 崩溃重启:运行时段内进程意外退出自动重启;启动后 30s 内崩溃计为一次失败,
-  连续 3 次失败则暂停自动重启并弹出置顶告警。
-- 手工控制:每个任务可手动 启动/停止/重启。
-- 自启动开关:采集器/API/看板 各有「自启动」勾选框,勾选才参与每日计划自动启动与崩溃
-  自动重启,与是否手动停止过无关;勾选状态持久化到 manager_state.json。排班无此开关,始终纯手动。
+管理采集器(`collector.main`)、API(`api.app`)、看板(`dashboard.app`)与排班(`shift/app.py`)子进程:
+- 目标状态收敛:勾选「自启动」的任务,运行时段内保持运行(意外退出或手动停止后 ≤5s 自动拉回,
+  连续 3 次启动失败熔断并弹窗告警),时段外保持停止;到点拉起与晚开机补拉由同一规则覆盖。
+- 时间从 config.yaml 推导:起点=最早采集窗口(工作日 08:30/周末 09:00),终点=全局 window_end。
+- 未勾选「自启动」:manager 不做任何干预,纯手动启停;勾选状态持久化到 manager_state.json。
+  排班无此开关,始终纯手动。
+- 手动启动/重启/重新勾选都会复位熔断计数,是解除「已暂停重启」的手段。
 
 运行:
     .\\.venv\\Scripts\\python.exe manager.py
@@ -623,6 +622,10 @@ class ManagerUI:
 
     def _toggle_auto_start(self, task: ManagedTask) -> None:
         task.auto_start = self._auto_start_vars[task.name].get()
+        if task.auto_start:
+            # 重新勾上=明确要求恢复自动调度,解除熔断暂停
+            task.restart_failures = 0
+            task.popup_shown = False
         save_auto_start_state({name: v.get() for name, v in self._auto_start_vars.items()})
         log.info("%s: 自启动勾选=%s", task.name, task.auto_start)
 
