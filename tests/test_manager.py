@@ -112,8 +112,7 @@ def test_tick_auto_start():
         now = dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH)
         events = task.tick(True, now)
     assert task.is_running(), "窗口内首次 tick 应自动启动"
-    assert task.auto_started_today is True
-    assert len(events) == 1 and "已自动启动" in events[0]["msg"]
+    assert len(events) == 1 and "已自动拉起" in events[0]["msg"]
     print("tick_auto_start OK")
 
 
@@ -124,77 +123,27 @@ def test_tick_auto_stop():
         task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
         assert task.is_running()
         events = task.tick(False, dt.datetime(2026, 8, 1, 21, 30, tzinfo=SH))
-    assert not task.is_running(), "窗口外首次 tick 应自动停止"
-    assert task.auto_stopped_today is True
+    assert not task.is_running(), "窗口外 tick 应自动停止"
     assert len(events) == 1 and "已自动停止" in events[0]["msg"]
-    # 自动停止后再次 tick（仍在窗口外），不应重复停止
+    # 勾选状态下窗口外手动再启 -> 收敛模型:再次被停止(原"只停一次"怪癖废除)
     with patch("manager.subprocess.Popen", return_value=_running_proc()):
-        task.start(automatic=False)
+        task.start()
         events2 = task.tick(False, dt.datetime(2026, 8, 1, 22, 0, tzinfo=SH))
-    assert task.is_running(), "已自动停止过，不应再次强制停止"
-    assert len(events2) == 0
+    assert not task.is_running(), "勾选状态下窗口外手动启动应被自动停止"
+    assert len(events2) == 1 and "已自动停止" in events2[0]["msg"]
     print("tick_auto_stop OK")
 
 
 def test_tick_no_duplicate_auto_start():
     task = _make_task()
-    with patch("manager.subprocess.Popen", return_value=_running_proc()):
+    with patch("manager.subprocess.Popen", return_value=_running_proc()) as popen:
         task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
+        spawned = popen.call_count   # Windows: 探测+拉起=2;Linux: 仅拉起=1;只看增量
         events = task.tick(True, dt.datetime(2026, 8, 1, 10, 0, tzinfo=SH))
+        assert popen.call_count == spawned, "第二拍不应再有任何拉起/探测"
     assert task.is_running()
-    assert len(events) == 0, "同一天内不应重复自动启动"
+    assert len(events) == 0, "运行中不应重复拉起"
     print("tick_no_duplicate_auto_start OK")
-
-
-def test_tick_manual_stop_blocks_auto_start():
-    task = _make_task()
-    with patch("manager.subprocess.Popen", return_value=_running_proc()):
-        task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
-        assert task.is_running()
-        task.stop(automatic=False)
-        assert task.user_stopped is True
-        events = task.tick(True, dt.datetime(2026, 8, 1, 10, 0, tzinfo=SH))
-    assert not task.is_running(), "手动停止后当天不应再自动启动"
-    assert len(events) == 0
-    print("tick_manual_stop_blocks_auto_start OK")
-
-
-def test_tick_manual_start_outside_window():
-    task = _make_task()
-    with patch("manager.subprocess.Popen", return_value=_running_proc()):
-        task.tick(False, dt.datetime(2026, 8, 1, 22, 0, tzinfo=SH))  # 标记 auto_stopped_today
-        task.start(automatic=False)
-        events = task.tick(False, dt.datetime(2026, 8, 1, 23, 0, tzinfo=SH))
-    assert task.is_running(), "窗口外手动启动后不应被自动停止"
-    assert len(events) == 0
-    print("tick_manual_start_outside_window OK")
-
-
-def test_tick_no_crash_restart_outside_window():
-    task = _make_task()
-    proc = _running_proc()
-    with patch("manager.subprocess.Popen", return_value=proc):
-        task.tick(False, dt.datetime(2026, 8, 1, 22, 0, tzinfo=SH))
-        task.start(automatic=False)
-    # 模拟进程崩溃退出
-    proc.poll.return_value = 1
-    events = task.tick(False, dt.datetime(2026, 8, 1, 22, 5, tzinfo=SH))
-    assert task.restart_failures == 0, "窗口外崩溃不应触发自动重启"
-    assert len(events) == 0
-    print("tick_no_crash_restart_outside_window OK")
-
-
-def test_tick_user_stopped_reset_on_new_day():
-    task = _make_task()
-    with patch("manager.subprocess.Popen", return_value=_running_proc()):
-        task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
-        task.stop(automatic=False)
-        assert task.user_stopped is True
-        events = task.tick(True, dt.datetime(2026, 8, 2, 9, 30, tzinfo=SH))
-    assert task.user_stopped is False, "跨天后 user_stopped 应被清除"
-    assert task.is_running(), "跨天后应恢复自动启动"
-    assert len(events) == 1 and "已自动启动" in events[0]["msg"]
-    print("tick_user_stopped_reset_on_new_day OK")
 
 
 def test_tick_manual_only_no_auto_start_stop():
@@ -211,7 +160,7 @@ def test_tick_manual_only_no_auto_start_stop():
     # 手动启动后,即使窗口外 tick 也不应自动停止
     proc = _running_proc()
     with patch("manager.subprocess.Popen", return_value=proc):
-        task.start(automatic=False)
+        task.start()
         events = task.tick(False, dt.datetime(2026, 8, 1, 22, 0, tzinfo=SH))
     assert task.is_running(), "auto_enabled=False 手动启动后不应被自动停止"
     assert len(events) == 0
@@ -222,21 +171,6 @@ def test_tick_manual_only_no_auto_start_stop():
     assert not task.is_running()
     assert task.restart_failures == 0, "auto_enabled=False 崩溃不应触发自动重启"
     print("tick_manual_only_no_auto_start_stop OK")
-
-
-def test_stop_automatic_parameter():
-    task = _make_task()
-    proc = _running_proc()
-    with patch("manager.subprocess.Popen", return_value=proc):
-        task.start()
-        task.stop(automatic=True)
-    assert task.user_stopped is False, "自动停止不应设置 user_stopped"
-    assert not task.is_running()
-    with patch("manager.subprocess.Popen", return_value=proc):
-        task.start()
-        task.stop(automatic=False)
-    assert task.user_stopped is True, "手动停止应设置 user_stopped"
-    print("stop_automatic_parameter OK")
 
 
 def test_find_external_pid_matches_pythonw():
@@ -339,12 +273,84 @@ def test_member_limit_schedule_rearm():
     print("member_limit_schedule_rearm OK")
 
 
+def test_tick_manual_stop_relaunch():
+    """勾选+窗口内手动停止:收敛模型应在下一拍自动拉回(≤5s)。"""
+    task = _make_task()
+    task._current_date = dt.date(2026, 8, 1)
+    with patch("manager.subprocess.Popen", return_value=_running_proc()):
+        task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
+        assert task.is_running()
+        task.stop()
+        assert not task.is_running()
+        events = task.tick(True, dt.datetime(2026, 8, 1, 10, 0, tzinfo=SH))
+    assert task.is_running(), "勾选状态下窗口内手动停止后应被自动拉回"
+    assert len(events) == 1 and "已自动拉起" in events[0]["msg"]
+    print("tick_manual_stop_relaunch OK")
+
+
+def test_tick_unchecked_not_stopped_outside_window():
+    """未勾选:窗口外在跑也不被自动停止(manager 零干预)。"""
+    task = _make_task()
+    task._current_date = dt.date(2026, 8, 1)
+    task.auto_start = False
+    proc = _running_proc()
+    with patch("manager.subprocess.Popen", return_value=proc):
+        task.start()
+        events = task.tick(False, dt.datetime(2026, 8, 1, 22, 0, tzinfo=SH))
+    assert task.is_running(), "未勾选的任务窗口外不应被自动停止"
+    assert len(events) == 0
+    print("tick_unchecked_not_stopped_outside_window OK")
+
+
+def test_tick_popen_fail_breaker():
+    """Popen 启动失败计入熔断:第 3 次失败当拍告警并暂停拉起;跨天复位后恢复。"""
+    task = _make_task()
+    task._current_date = dt.date(2026, 8, 1)
+    with patch("manager.subprocess.Popen", side_effect=OSError("boom")):
+        task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))            # 失败 1/3
+        task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))            # 失败 2/3
+        events3 = task.tick(True, dt.datetime(2026, 8, 1, 9, 31, tzinfo=SH))  # 失败 3/3 -> 告警
+        events4 = task.tick(True, dt.datetime(2026, 8, 1, 9, 32, tzinfo=SH))  # 已熔断 -> 去重
+    assert task.restart_failures == 3
+    assert not task.is_running()
+    assert len(events3) == 1 and events3[0]["type"] == "alert", "第 3 次失败当拍应告警"
+    assert len(events4) == 0, "告警当日去重"
+    # 跨天复位熔断,恢复自动拉起
+    with patch("manager.subprocess.Popen", return_value=_running_proc()):
+        task.tick(True, dt.datetime(2026, 8, 2, 8, 35, tzinfo=SH))
+    assert task.is_running(), "跨天复位后应恢复自动拉起"
+    assert task.restart_failures == 0
+    print("tick_popen_fail_breaker OK")
+
+
+def test_tick_quick_crash_trips_breaker():
+    """启动后 <30s 崩溃连续 3 次:熔断告警一次并暂停拉起(uptime 计数路径)。"""
+    task = _make_task()
+    task._current_date = dt.date.today()
+    now = dt.datetime.now().astimezone()
+    proc = _running_proc()
+    events_all = []
+    with patch("manager.subprocess.Popen", return_value=proc):
+        for _ in range(3):
+            proc.poll.return_value = None      # 复位为运行中,先拉起
+            task.tick(True, now)
+            proc.poll.return_value = 1         # 5 秒后崩溃(< 30s 宽限)
+            events_all.extend(task.tick(True, now + dt.timedelta(seconds=5)))
+    assert task.restart_failures == 3, "连续 3 次秒退应计满失败"
+    alerts = [e for e in events_all if e["type"] == "alert"]
+    assert len(alerts) == 1, "熔断告警只弹一次"
+    with patch("manager.subprocess.Popen", return_value=_running_proc()) as popen:
+        task.tick(True, now + dt.timedelta(seconds=10))
+        popen.assert_not_called(), "熔断后不应再拉起"
+    print("tick_quick_crash_trips_breaker OK")
+
+
 # ── 「自启动」勾选框行为 ─────────────────────────────────────────────
 
 _TMP = Path(__file__).resolve().parent / ".test_tmp"  # gitignored 测试临时目录(勿用系统 %TEMP%)
 
 def test_tick_auto_start_requires_checkbox():
-    """未勾选自启动:窗口内到点不自启、不置位;中途勾选后窗口内立即自启动。"""
+    """未勾选自启动:窗口内不自动拉起;中途勾选后窗口内立即拉起。"""
     task = _make_task()
     task._current_date = dt.date(2026, 8, 1)  # 避开跨天重置
     task.auto_start = False
@@ -353,25 +359,12 @@ def test_tick_auto_start_requires_checkbox():
         popen.assert_not_called()
     assert not task.is_running()
     assert len(events) == 0
-    assert task.auto_started_today is False, "未勾选时不置位,当日内勾选后仍可自启"
     task.auto_start = True
     with patch("manager.subprocess.Popen", return_value=_running_proc()):
         events = task.tick(True, dt.datetime(2026, 8, 1, 10, 0, tzinfo=SH))
     assert task.is_running(), "勾选后处于运行时段应立即自启动"
-    assert len(events) == 1 and "已自动启动" in events[0]["msg"]
+    assert len(events) == 1 and "已自动拉起" in events[0]["msg"]
     print("tick_auto_start_requires_checkbox OK")
-
-
-def test_tick_checkbox_overrides_user_stopped():
-    """勾选自启动时,即使此前手动停止过(如窗口开启前点了停止),到点也应自启动。"""
-    task = _make_task()
-    task._current_date = dt.date(2026, 8, 1)
-    task.user_stopped = True
-    with patch("manager.subprocess.Popen", return_value=_running_proc()):
-        events = task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
-    assert task.is_running(), "自启动只由勾选状态决定,不应被历史手动停止拦截"
-    assert len(events) == 1
-    print("tick_checkbox_overrides_user_stopped OK")
 
 
 def test_tick_no_crash_restart_when_unchecked():
@@ -381,7 +374,7 @@ def test_tick_no_crash_restart_when_unchecked():
     task.auto_start = False
     proc = _running_proc()
     with patch("manager.subprocess.Popen", return_value=proc):
-        task.start(automatic=False)
+        task.start()
     proc.poll.return_value = 1
     events = task.tick(True, dt.datetime(2026, 8, 1, 9, 40, tzinfo=SH))
     assert not task.is_running()
@@ -447,11 +440,11 @@ def main():
     test_tick_auto_start()
     test_tick_auto_stop()
     test_tick_no_duplicate_auto_start()
-    test_tick_manual_stop_blocks_auto_start()
-    test_tick_manual_start_outside_window()
-    test_tick_no_crash_restart_outside_window()
-    test_tick_user_stopped_reset_on_new_day()
-    test_stop_automatic_parameter()
+    test_tick_manual_stop_relaunch()
+    test_tick_unchecked_not_stopped_outside_window()
+    test_tick_no_crash_restart_when_unchecked()
+    test_tick_popen_fail_breaker()
+    test_tick_quick_crash_trips_breaker()
     test_tick_manual_only_no_auto_start_stop()
     test_find_external_pid_matches_pythonw()
     test_tick_health_check_clears_failures()
@@ -459,8 +452,6 @@ def main():
     test_update_status_sets_dot()
     test_member_limit_schedule_rearm()
     test_tick_auto_start_requires_checkbox()
-    test_tick_checkbox_overrides_user_stopped()
-    test_tick_no_crash_restart_when_unchecked()
     test_auto_start_state_roundtrip()
     test_ui_auto_start_checkboxes()
     print("ALL manager tests OK")

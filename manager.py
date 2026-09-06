@@ -213,7 +213,7 @@ class ManagedTask:
         self.cwd = cwd or ROOT                    # 运行工作目录(脚本所属项目目录)
         self.match_key = match_key                # 若非 None,external-PID 按此串匹配(否则取脚本名/module)
         self.auto_enabled = auto_enabled          # False -> 仅手动启停,不自动启停/自动重启
-        self.auto_start = True                    # 「自启动」勾选(UI 持久化);False 时到点不自启、崩溃不自动重启
+        self.auto_start = True                    # 「自启动」勾选(UI 持久化);False -> manager 不干预该任务
         # pre_run + run_target: 子进程先 exec(pre_run)(如 sys.path 注入/webbrowser 抑制),
         # 再 runpy.run_path(run_target, run_name="__main__")。替代独立包装脚本(如原 shift_manager.py)
         if pre_run and run_target:
@@ -230,15 +230,12 @@ class ManagedTask:
 
         self.process: subprocess.Popen | None = None
         self.external_pid: int | None = None
-        self.user_stopped = False
         self.restart_failures = 0
         self.started_at: dt.datetime | None = None
-        self.popup_shown = False                  # 3 次失败告警去重
+        self.popup_shown = False                  # 熔断告警去重(跨天重置)
         self._log_handle = None
 
-        self._current_date: dt.date | None = None # 当前已重置到的日期
-        self.auto_started_today = False           # 当天是否已触发过自动启动
-        self.auto_stopped_today = False           # 当天是否已触发过自动停止
+        self._current_date: dt.date | None = None # 当前已重置到的日期(跨天重置熔断计数用)
 
     # ---- 进程状态 ----
     def is_running(self) -> bool:
@@ -309,7 +306,6 @@ class ManagedTask:
         ext = self._find_external_pid()
         if ext:
             self.external_pid = ext
-            self.user_stopped = False
             self.restart_failures = 0
             self.popup_shown = False
             log.info("%s: 发现外部进程 pid=%s,接管", self.name, ext)
@@ -330,18 +326,15 @@ class ManagedTask:
                 creationflags=creationflags, env=self._env(),
             )
             self.started_at = dt.datetime.now().astimezone()
-            self.user_stopped = False
             self.popup_shown = False
-            action = "自动重启" if automatic else "手动启动"
+            action = "自动拉起" if automatic else "手动启动"
             log.info("%s: %s pid=%s", self.name, action, self.process.pid)
             return True
         except Exception as exc:
             log.exception("%s: 启动失败: %s", self.name, exc)
             return False
 
-    def stop(self, automatic: bool = False) -> None:
-        if not automatic:
-            self.user_stopped = True
+    def stop(self) -> None:
         if self.external_pid and not self.is_running():
             self._kill_external()
             self.external_pid = None
@@ -367,92 +360,98 @@ class ManagedTask:
 
     def restart(self) -> None:
         self.stop()
-        self.user_stopped = False
         self.restart_failures = 0
         self.popup_shown = False
         self.start()
 
     # ---- 监控一拍 ----
     def tick(self, in_window: bool, now: dt.datetime) -> list[dict]:
-        """每 MONITOR_INTERVAL_MS 调一次;返回事件列表({"type":"alert"|"info","msg":...})。"""
+        """每 MONITOR_INTERVAL_MS 调一次;向目标状态收敛,返回事件列表({"type":"alert"|"info","msg":...})。
+
+        目标状态由「自启动」勾选(auto_start)与运行时段唯一决定:
+        未勾选 -> 不干预;勾选+窗口外 -> 确保停止;勾选+窗口内 -> 确保运行(熔断暂停除外)。
+        到点拉起、晚开机补拉、崩溃/手动停止后拉回都由同一条"窗口内未运行则拉起"规则覆盖。
+        """
         events: list[dict] = []
         today = now.date()
 
-        # 1. 跨天重置
+        # 1. 跨天重置(仅熔断相关)
         if self._current_date != today:
             self._current_date = today
-            self.auto_started_today = False
-            self.auto_stopped_today = False
-            self.user_stopped = False
             self.restart_failures = 0
             self.popup_shown = False
             log.info("%s: 跨天重置,日期=%s", self.name, today)
 
-        # 仅手动启停的任务:不做任何自动启停/自动重启,完全由手动控制
+        # 2. 仅手动启停的任务:完全由手动控制
         if not self.auto_enabled:
             return events
 
-        # 2. 自动停止（每天触发一次）
-        if not in_window and not self.auto_stopped_today:
-            if self.is_running() or self.external_pid:
-                self.stop(automatic=True)
-                events.append({"type": "info", "msg": f"{self.name}: 超出运行时段,已自动停止"})
-            self.auto_stopped_today = True
+        # 3. 未勾「自启动」:manager 不做任何干预(不自动启停、不自动重启)
+        if not self.auto_start:
             return events
 
-        # 3. 自动启动（每天触发一次;只看「自启动」勾选,与是否手动停止过无关）
-        if in_window and not self.auto_started_today and self.auto_start:
-            if not self.is_running() and self.external_pid is None:
-                self.start(automatic=True)
-                events.append({"type": "info", "msg": f"{self.name}: 到达运行时段,已自动启动"})
-            self.auto_started_today = True
+        # 4. 窗口外:目标 = 停止
+        if not in_window:
+            if self.is_running() or self.external_pid:
+                self.stop()
+                events.append({"type": "info", "msg": f"{self.name}: 超出运行时段,已自动停止"})
+            return events
 
-        # 4. 崩溃重启与健康检查（仅在窗口内;未勾选「自启动」时不做任何自动干预）
-        if in_window and self.auto_start:
-            if self.process is not None:
-                rc = self.process.poll()
-                if rc is None:
-                    # 仍在运行;跑过 grace 即视为健康,清零失败计数
-                    if self.started_at and (now - self.started_at).total_seconds() >= GRACE_SECONDS:
-                        if self.restart_failures:
-                            self.restart_failures = 0
-                else:
-                    # 进程已退出
-                    self._cleanup_process()
-                    if self.user_stopped:
-                        return events
-                    uptime = (now - self.started_at).total_seconds() if self.started_at else 0
-                    if uptime < GRACE_SECONDS:
-                        self.restart_failures += 1
-                        log.warning("%s: 启动后 %.0fs 即退出(rc=%s),失败 %d/%d",
-                                    self.name, uptime, rc, self.restart_failures, MAX_FAILURES)
-                    else:
+        # 5. 窗口内:目标 = 运行(熔断触发时暂停拉起)
+        if self.process is not None:
+            rc = self.process.poll()
+            if rc is None:
+                # 仍在运行;跑过 grace 即视为健康,清零失败计数
+                if self.started_at and (now - self.started_at).total_seconds() >= GRACE_SECONDS:
+                    if self.restart_failures:
                         self.restart_failures = 0
-                        log.warning("%s: 运行 %.0fs 后退出(rc=%s),正常重启", self.name, uptime, rc)
-                    if self.restart_failures >= MAX_FAILURES:
-                        if not self.popup_shown:
-                            self.popup_shown = True
-                            events.append({"type": "alert",
-                                           "msg": f"{self.name} 连续重启 {MAX_FAILURES} 次失败,已暂停自动重启。\n请检查日志:{self.log_path}"})
-                        return events
-                    self.start(automatic=True)
-            elif self.external_pid is not None:
-                # 接管的外部进程:周期探活,死亡则清理并重启(否则 UI 永远显示"运行中(外部)")
-                if not _pid_alive(self.external_pid):
-                    log.warning("%s: 外部进程 pid=%s 已退出,清理并重启", self.name, self.external_pid)
-                    self.external_pid = None
-                    if not self.user_stopped:
-                        self.start(automatic=True)
-            elif self.external_pid is None:
-                # 没有任何进程
-                if not self.user_stopped and self.restart_failures >= MAX_FAILURES:
-                    if not self.popup_shown:
-                        self.popup_shown = True
-                        events.append({"type": "alert",
-                                       "msg": f"{self.name} 连续重启 {MAX_FAILURES} 次失败,已暂停自动重启。\n请检查日志:{self.log_path}"})
-                elif not self.user_stopped:
-                    self.start(automatic=True)
+            else:
+                # 进程已退出 -> 计数并重新拉起或熔断
+                self._cleanup_process()
+                events.extend(self._process_died(now, rc))
+        elif self.external_pid is not None:
+            # 接管的外部进程:周期探活;死亡则清理,下一拍由 5d 统一拉起
+            if not _pid_alive(self.external_pid):
+                log.warning("%s: 外部进程 pid=%s 已退出,清理", self.name, self.external_pid)
+                self.external_pid = None
+        else:
+            # 没有任何进程:到点首拉 / 手动停止后保活拉回 / 上拍拉起失败重试
+            if self.restart_failures >= MAX_FAILURES:
+                self._alert_if_tripped(events)
+            elif self.start(automatic=True):
+                events.append({"type": "info", "msg": f"{self.name}: 运行时段内未运行,已自动拉起"})
+            else:
+                self.restart_failures += 1
+                log.warning("%s: 拉起失败,失败 %d/%d", self.name, self.restart_failures, MAX_FAILURES)
+                self._alert_if_tripped(events)
         return events
+
+    def _process_died(self, now: dt.datetime, rc) -> list[dict]:
+        """窗口内本 UI 拉起的进程退出:按 uptime 计数,熔断告警或重新拉起。"""
+        events: list[dict] = []
+        uptime = (now - self.started_at).total_seconds() if self.started_at else 0
+        if uptime < GRACE_SECONDS:
+            self.restart_failures += 1
+            log.warning("%s: 启动后 %.0fs 即退出(rc=%s),失败 %d/%d",
+                        self.name, uptime, rc, self.restart_failures, MAX_FAILURES)
+        else:
+            self.restart_failures = 0
+            log.warning("%s: 运行 %.0fs 后退出(rc=%s),正常重启", self.name, uptime, rc)
+        if self.restart_failures >= MAX_FAILURES:
+            self._alert_if_tripped(events)
+            return events
+        if not self.start(automatic=True):
+            self.restart_failures += 1
+            log.warning("%s: 拉起失败,失败 %d/%d", self.name, self.restart_failures, MAX_FAILURES)
+            self._alert_if_tripped(events)
+        return events
+
+    def _alert_if_tripped(self, events: list[dict]) -> None:
+        """熔断告警(当日去重):append 一条 alert 事件。"""
+        if self.restart_failures >= MAX_FAILURES and not self.popup_shown:
+            self.popup_shown = True
+            events.append({"type": "alert",
+                           "msg": f"{self.name} 连续重启 {MAX_FAILURES} 次失败,已暂停自动重启。\n请检查日志:{self.log_path}"})
 
 
 # 任务定义:看板用 AUTOWFM_DEBUG=0 关掉 reloader,单进程便于崩溃检测/停止
@@ -615,7 +614,7 @@ class ManagerUI:
         self._update_status()
 
     def _manual_stop(self, task: ManagedTask) -> None:
-        task.stop(automatic=False)
+        task.stop()
         self._update_status()
 
     def _manual_restart(self, task: ManagedTask) -> None:
@@ -665,10 +664,6 @@ class ManagerUI:
                     vars_["status"].set("已暂停重启")
                     vars_["status_label"].configure(fg="#aa2222")
                     vars_["status_dot"].configure(fg="#aa2222")
-                elif task.user_stopped:
-                    vars_["status"].set("已停止")
-                    vars_["status_label"].configure(fg="#666666")
-                    vars_["status_dot"].configure(fg="#666666")
                 else:
                     vars_["status"].set("未运行")
                     vars_["status_label"].configure(fg="#aa2222")
