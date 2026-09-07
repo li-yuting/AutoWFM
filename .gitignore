@@ -50,6 +50,8 @@ Thumbs.db
 .workbuddy/
 reasonix.toml
 面试准备.md
+# 本地操作笔记，不入库
+docs/git-push-github-notes.md
 .test_tmp/
 tests/.test_tmp/
 # ---- 接待上限批量修改 ----
