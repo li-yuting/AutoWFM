@@ -110,10 +110,8 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=args.headless)
-        context_kwargs = {}
-        if os.path.exists(STATE_FILE):
-            context_kwargs["storage_state"] = STATE_FILE
-        context = browser.new_context(**context_kwargs)
+        context = browser.new_context(
+            storage_state=STATE_FILE if os.path.exists(STATE_FILE) else None)
         page = context.new_page()
 
         def on_request(request):

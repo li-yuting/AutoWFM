@@ -8,6 +8,20 @@ from peakflow import config
 from peakflow.forecast import total_by_date, weekly_summary
 
 
+_DETAIL_COLS = ["client_vol", "inbound_low", "inbound", "inbound_high",
+                "transfer_low", "transfer", "transfer_high"]
+
+
+def _detail_row(d, label, vals, ratio):
+    return {"日期": d.date(), "客户类型": label,
+            "客户量": round(vals["client_vol"]),
+            "咨询占比": ratio,
+            "进线-悲观": round(vals["inbound_low"]), "进线-中性": round(vals["inbound"]),
+            "进线-乐观": round(vals["inbound_high"]),
+            "转人工-悲观": round(vals["transfer_low"]), "转人工-中性": round(vals["transfer"]),
+            "转人工-乐观": round(vals["transfer_high"])}
+
+
 def _detail_frame(forecast_df: pd.DataFrame) -> pd.DataFrame:
     """长表 → 明细宽表：每日期 8 类型行 + 合计行。"""
     rows = []
@@ -15,59 +29,38 @@ def _detail_frame(forecast_df: pd.DataFrame) -> pd.DataFrame:
         sub = forecast_df[forecast_df["date"] == d].set_index("client_type")
         for t in config.CLIENT_TYPES:
             r = sub.loc[t]
-            rows.append({"日期": d.date(), "客户类型": t,
-                         "客户量": round(r["client_vol"]),
-                         "咨询占比": round(r["ratio"], 6),
-                         "进线-悲观": round(r["inbound_low"]), "进线-中性": round(r["inbound"]),
-                         "进线-乐观": round(r["inbound_high"]),
-                         "转人工-悲观": round(r["transfer_low"]), "转人工-中性": round(r["transfer"]),
-                         "转人工-乐观": round(r["transfer_high"])})
-        agg = {c: sum(sub[c]) for c in
-               ["client_vol", "inbound_low", "inbound", "inbound_high",
-                "transfer_low", "transfer", "transfer_high"]}
-        rows.append({"日期": d.date(), "客户类型": "合计",
-                     "客户量": round(agg["client_vol"]),
-                     "咨询占比": None,
-                     "进线-悲观": round(agg["inbound_low"]), "进线-中性": round(agg["inbound"]),
-                     "进线-乐观": round(agg["inbound_high"]),
-                     "转人工-悲观": round(agg["transfer_low"]), "转人工-中性": round(agg["transfer"]),
-                     "转人工-乐观": round(agg["transfer_high"])})
+            rows.append(_detail_row(d, t, r, round(r["ratio"], 6)))
+        rows.append(_detail_row(d, "合计", sub[_DETAIL_COLS].sum(), None))
     return pd.DataFrame(rows)
+
+
+_WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+# (标签, 日视图列名, 周视图基准列名, 周视图三档系数)
+_BANDS = [("进线-悲观", "inbound_low", "inbound", 0.9),
+          ("进线-中性", "inbound", "inbound", 1.0),
+          ("进线-乐观", "inbound_high", "inbound", 1.1),
+          ("转人工-悲观", "transfer_low", "transfer", 0.9),
+          ("转人工-中性", "transfer", "transfer", 1.0),
+          ("转人工-乐观", "transfer_high", "transfer", 1.1)]
 
 
 def _overview_frame(o_total, h_total, o_week, h_week) -> pd.DataFrame:
     rows = []
-    o_by = {d: r for d, r in zip(o_total["date"], o_total.iterrows())}
-    h_by = {d: r for d, r in zip(h_total["date"], h_total.iterrows())}
-    for d in sorted(o_total["date"]):
-        o = o_by[d][1]
-        h = h_by[d][1]
-        rows.append({"日期": d.date(), "星期": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][d.weekday()],
-                     "在线进线-悲观": round(o["inbound_low"]), "在线进线-中性": round(o["inbound"]),
-                     "在线进线-乐观": round(o["inbound_high"]),
-                     "在线转人工-悲观": round(o["transfer_low"]), "在线转人工-中性": round(o["transfer"]),
-                     "在线转人工-乐观": round(o["transfer_high"]),
-                     "热线进线-悲观": round(h["inbound_low"]), "热线进线-中性": round(h["inbound"]),
-                     "热线进线-乐观": round(h["inbound_high"]),
-                     "热线转人工-悲观": round(h["transfer_low"]), "热线转人工-中性": round(h["transfer"]),
-                     "热线转人工-乐观": round(h["transfer_high"])})
-    df = pd.DataFrame(rows)
-    week_rows = []
-    o_week_by = {w: r for w, r in zip(o_week["week"], o_week.iterrows())}
-    h_week_by = {w: r for w, r in zip(h_week["week"], h_week.iterrows())}
-    for w in o_week["week"]:
-        o = o_week_by[w][1]
-        h = h_week_by[w][1]
-        week_rows.append({"日期": f"周汇总 {w}", "星期": "",
-                           "在线进线-悲观": round(o["inbound"] * 0.9), "在线进线-中性": round(o["inbound"]),
-                           "在线进线-乐观": round(o["inbound"] * 1.1),
-                           "在线转人工-悲观": round(o["transfer"] * 0.9), "在线转人工-中性": round(o["transfer"]),
-                           "在线转人工-乐观": round(o["transfer"] * 1.1),
-                           "热线进线-悲观": round(h["inbound"] * 0.9), "热线进线-中性": round(h["inbound"]),
-                           "热线进线-乐观": round(h["inbound"] * 1.1),
-                           "热线转人工-悲观": round(h["transfer"] * 0.9), "热线转人工-中性": round(h["transfer"]),
-                           "热线转人工-乐观": round(h["transfer"] * 1.1)})
-    return pd.concat([df, pd.DataFrame(week_rows)], ignore_index=True)
+    daily = o_total.merge(h_total, on="date", suffixes=("_o", "_h")).sort_values("date")
+    for r in daily.itertuples():
+        row = {"日期": r.date.date(), "星期": _WEEKDAY_CN[r.date.weekday()]}
+        for ch, suf in (("在线", "_o"), ("热线", "_h")):
+            for label, o_col, _base, _k in _BANDS:
+                row[f"{ch}{label}"] = round(getattr(r, f"{o_col}{suf}"))
+        rows.append(row)
+    weekly = o_week.merge(h_week, on="week", suffixes=("_o", "_h"))
+    for r in weekly.itertuples():
+        row = {"日期": f"周汇总 {r.week}", "星期": ""}
+        for ch, suf in (("在线", "_o"), ("热线", "_h")):
+            for label, _o_col, base, k in _BANDS:
+                row[f"{ch}{label}"] = round(getattr(r, f"{base}{suf}") * k)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _backtest_frame(sigmas) -> pd.DataFrame:

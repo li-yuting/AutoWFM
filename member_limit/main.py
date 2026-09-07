@@ -12,17 +12,13 @@ from member_limit import core
 from member_limit.config import ConfigError, load as load_config
 
 
-def build_parser() -> argparse.ArgumentParser:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="腾讯云联络中心成员接待上限批量修改")
     ap.add_argument("--limit", type=int, default=None,
                     help="目标接待上限（缺省用 config.yaml 的 member_limit.limit）")
     ap.add_argument("--dry-run", action="store_true",
                     help="只检查当前值，不实际修改")
-    return ap
-
-
-def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    args = ap.parse_args(argv)
     try:
         config = load_config()
     except ConfigError as exc:

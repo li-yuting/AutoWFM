@@ -2,17 +2,17 @@
 
 ## Project Structure & Module Organization
 
-- `collector/` — data collection: WebSocket scraping (`ws.py`), CRM detail export (`detail.py`: 会话记录/工单明细), forecasting, backfill, notifications, scheduler. All writes go through the Repository abstraction in `repository.py` (SQLite today; `config.yaml storage.backend` selects the backend).
+- `collector/` — data collection: WebSocket scraping (`ws.py`), CRM detail export (`detail.py`: 会话记录/工单明细), forecasting, backfill, notifications, scheduler. All writes go through the Repository abstraction in `collector/repository.py` (SQLite; 无后端切换，`storage.backend` 配置键已移除).
 - `peakflow/` - 30-day 进线量预测（趋势 + 周季节分解外推，三档区间）；Windows 计划任务 `AutoWFM_Forecast` 每天 09:30 运行，或 manager.py「进线量预测」页手动触发。输入 AutoTableau 的 UTF-16 TSV，输出 Excel + HTML 到 `output/`；与看板实时预测量（`data/预估流入量.csv`）相互独立。
-- `dashboard/` — read-only Flask viewer (:8080) over `data/*.db` and `data/预估流入量.csv`; data via `api_client.py` (FastAPI).
-- `api/` — FastAPI read layer (:8081); dashboard falls back to `dashboard/queries.py` when the API is down.
+- `dashboard/` — read-only Flask viewer (:8080) over `data/*.db` and `data/预估流入量.csv`; data 直连 `dashboard/queries.py`。`api/`（FastAPI :8081）仅供第三方只读消费。
+- `api/` — FastAPI read layer (:8081), 仅供第三方只读消费；看板不再经它取数。
 - `shift/` — scheduling subproject (Flask app `shift/app.py`), supervised by `manager.py`.
 - `member_limit/` — 腾讯云联络中心成员接待上限批量修改（headless Playwright），manager.py「接待上限」页调用；凭据在 `.env`（AUTOWFM_QCLOUD_ACCOUNT / AUTOWFM_QCLOUD_PASSWORD），名单在 config.yaml。
 - `writeforecast/` — two independent scripts, not a package: `writeforecast.py` (周度预估 Excel → `data/预估流入量.csv`) and `时段人力数架构准备_v2.py` (班表 Excel → 按日期/小时展开的时段人力架构表)。
 - `manager.py` — optional Tkinter supervisor for the collector, API, dashboard, and shift processes. Has a single-instance guard (lock file): a second manager exits immediately on startup - run only one instance at a time, or concurrent writers can trip SQLite readonly errors on `data/*.db`.
 - 根目录 `token_store.py` / `抓取Token.py` — CRM token 自动抓取：Playwright 登录 CRM(SSO) 抓取最新 token，写入 `token.json` 并回填 `.env`(AUTOWFM_TOKEN)。采集/数据补全检测到 token 失效时自动调用刷新；敏感文件 `login.json`、`token.json`、`storage_state.json` 均不入 git。
 - `tests/` — plain-`assert` test scripts (`test_*.py`) plus a live `smoke.py`.
-- Root config: `config.yaml`, `.env` (secrets, git-ignored), `holidays.txt`.
+- Root config: `config.yaml`, `.env` (secrets, git-ignored).
 
 ## Build, Test, and Development Commands
 
@@ -26,7 +26,6 @@ $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m api.app              # API 服务 http://127.0.0.1:8081
 .\.venv\Scripts\python.exe manager.py              # 桌面管理器 (not -m)
 .\.venv\Scripts\python.exe 抓取Token.py            # 手动刷新 CRM token (--headless 无头)
-.\.venv\Scripts\python.exe token_store.py --selftest   # token_store 自测
 .\.venv\Scripts\python.exe tests\test_storage.py   # 单个测试
 ```
 
@@ -56,6 +55,6 @@ Use `-m` for `collector`/`dashboard`/`api` so the project root stays on `sys.pat
 ## Security & Configuration
 
 - Never commit secrets into `config.yaml` or source. Put tokens/keys in `.env` (git-ignored), loaded via `load_dotenv()`; mirror placeholders in `.env.example` and `config.example.yaml`.
-- Env vars consumed: `AUTOWFM_TOKEN` / `AUTOWFM_TENEMENT_ID` (CRM export), `AUTOWFM_WEBHOOK_MAIN` / `AUTOWFM_WEBHOOK_SECONDARY` (企微 webhook), `AUTOWFM_DASH_TOKEN` (dashboard/API Bearer), optional `AUTOWFM_API_URL` / `AUTOWFM_DATA_DIR`.
+- Env vars consumed: `AUTOWFM_TOKEN` / `AUTOWFM_TENEMENT_ID` (CRM export), `AUTOWFM_WEBHOOK_MAIN` / `AUTOWFM_WEBHOOK_SECONDARY` (企微 webhook), `AUTOWFM_DASH_TOKEN` (dashboard/API Bearer), optional `AUTOWFM_DATA_DIR`.
 - CRM token 主来源为 `.env` 的 `AUTOWFM_TOKEN`；失效时由采集/数据补全自动运行 `抓取Token.py` 刷新，并同步写回 `.env` 与 `token.json`。账密放根目录 `login.json`（`{"username":..., "password":...}`），本文件与 `storage_state.json` 均不入 git、不打日志。
 - The dashboard requires `Authorization: Bearer <AUTOWFM_DASH_TOKEN>`; leave the token empty for local development.

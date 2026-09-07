@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import json
 from pathlib import Path
 
@@ -9,8 +8,6 @@ import pandas as pd
 from peakflow import config
 
 _TEMPLATE = Path(__file__).with_name("dashboard_template.html")
-_INNER_BANNER = "<!-- ===="  # 内页源文档起始横幅（构建时定位，不进入输出）
-_SRCDOC_PLACEHOLDER = "__SRCDOC__"
 
 
 def _iso_date(value) -> str:
@@ -76,22 +73,16 @@ def build_dashboard_data(histories: dict[str, pd.DataFrame],
 
 def write_dashboard(data: dict, out_path: Path,
                     template_path: Path = _TEMPLATE) -> Path:
-    """渲染网页：读模板外壳，把内页源文档注入 JSON 后整体 html.escape 进
-    <iframe srcdoc>。模板内页按普通 HTML/JS 编写（不再手工转义）。"""
+    """渲染网页：单模板（内层文档），在 `var FD = __FD_PAYLOAD__;` 处注入 JSON。
+
+    JSON 中 "</" 转义为 "<\\/"（反斜杠+斜杠）防止被当作标签闭合；无需整文档 HTML 转义。
+    """
     template = Path(template_path).read_text(encoding="utf-8")
-    banner = template.index(_INNER_BANNER)  # 外壳结束 / 内页源开始
-    outer = template[:banner]
-    rest = template[banner:]
-    inner = rest[rest.index("<!doctype html>"):].rstrip("\r\n")
-    raw = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     fd_placeholder = "var FD = __FD_PAYLOAD__;"
-    if inner.count(fd_placeholder) != 1:
+    if template.count(fd_placeholder) != 1:
         raise ValueError(f"网页模板缺少唯一数据占位位置: {template_path}")
-    inner = inner.replace(fd_placeholder, f"var FD = {raw};", 1)
-    escaped = html.escape(inner, quote=True)
-    if outer.count(_SRCDOC_PLACEHOLDER) != 1:
-        raise ValueError(f"网页模板缺少 iframe 占位位置: {template_path}")
-    rendered = outer.replace(_SRCDOC_PLACEHOLDER, escaped, 1)
+    raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    rendered = template.replace(fd_placeholder, f"var FD = {raw};", 1)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(rendered, encoding="utf-8")

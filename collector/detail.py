@@ -129,12 +129,11 @@ def _download_content(mode_name, mcfg, secrets, today_str, timeout):
     return resp.content
 
 
-def download_and_count(mode_name, mcfg, secrets, today_str, timeout):
-    """下载明细并计数。token 失效时自动刷新一次后重试；仍失败抛出原异常。"""
+def _download_with_refresh(mode_name, mcfg, secrets, date_str, timeout):
+    """下载一次明细内容；token 失效时自动刷新一次后重试；仍失败抛原异常。"""
     for attempt in range(2):
         try:
-            content = _download_content(mode_name, mcfg, secrets, today_str, timeout)
-            break
+            return _download_content(mode_name, mcfg, secrets, date_str, timeout)
         except (TokenInvalidError, requests.HTTPError) as exc:
             if attempt == 1 or not _should_refresh_on(exc):
                 raise
@@ -142,7 +141,11 @@ def download_and_count(mode_name, mcfg, secrets, today_str, timeout):
             if not new_token:
                 raise
             secrets["token"] = new_token
-            continue
+
+
+def download_and_count(mode_name, mcfg, secrets, today_str, timeout):
+    """下载明细并计数。"""
+    content = _download_with_refresh(mode_name, mcfg, secrets, today_str, timeout)
     df = _parse_excel(content)
     if df.empty:
         raise EmptyDownloadError(f"{mode_name} 下载的 Excel 为空表({today_str})")

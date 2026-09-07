@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """看板数据层：只读 data/*.db + 预估流入量.csv，做小时/按日聚合。
 
-底层 SQLite 访问已委托给 collector.repository.SQLiteReadOnlyRepository(Repository 模式)。
-聚合逻辑(build_day/build_month/方案D 增量等)不依赖存储实现,只调本模块的 _rows_in/_cols 等。
+底层 SQLite 访问委托给 collector.repository.SQLiteReadOnlyRepository；
+聚合逻辑(build_day/build_month/方案D 增量等)只调本模块的 _rows_in 等。
 """
 import csv
-import sqlite3
-from datetime import date as _date
+from calendar import monthrange
+from datetime import date as _date, timedelta
 from pathlib import Path
 
 from collector.repository import SQLiteReadOnlyRepository
@@ -15,82 +15,63 @@ def _repo_for(data_dir):
     """为指定 data_dir 创建只读 Repository(每次调用新建,无状态)。"""
     return SQLiteReadOnlyRepository(data_dir)
 
-def _connect(data_dir, source):
-    """向后兼容:直接返回 sqlite3 连接(仅 latest_data_date 等少数处用)。"""
-    return sqlite3.connect(str(Path(data_dir) / f"{source}.db"))
-
-def _cols(con):
-    return [r[1] for r in con.execute("PRAGMA table_info(t)").fetchall()]
-
 def _rows_in(data_dir, source, prefix):
-    """某天(prefix=YYYY-MM-DD)或某月(prefix=YYYY-MM)该源所有行(升序)+列名。无表/无数据返回 ([], [])。
-    委托给 SQLiteReadOnlyRepository.rows_in。"""
+    """某天(prefix=YYYY-MM-DD)或某月(prefix=YYYY-MM)该源所有行(升序)+列名。无表/无数据返回 ([], [])。"""
     return _repo_for(data_dir).rows_in(source, prefix)
 
 
-def _rows_in_day(data_dir, source, date_str):
-    return _rows_in(data_dir, source, date_str)
-
-
-def _hourly_agg(data_dir, source, date_str, keep="last"):
-    """{小时: {列: 值}}，keep="last"取每小时最大时间戳，keep="first"取最小。"""
-    rows, cols = _rows_in_day(data_dir, source, date_str)
+def _pick(rows, cols, keyfn, keep="last"):
+    """{key: 行}；keep="first" 保留最小时间戳，否则升序覆盖保留最大。"""
     out = {}
     for r in rows:
         row = dict(zip(cols, r))
-        hh = int(row["时间"][11:13])
+        k = keyfn(row)
         if keep == "first":
-            out.setdefault(hh, row)
+            out.setdefault(k, row)
         else:
-            out[hh] = row  # 升序覆盖 -> 保留最大
+            out[k] = row
     return out
+
+
+def _avg_buckets(rows, cols, keyfn):
+    """{key: {列: 该桶所有快照均值}}，瞬时量(签入/空闲/在线)用。无表/无数据返回 {}。"""
+    buckets = {}
+    for r in rows:
+        row = dict(zip(cols, r))
+        buckets.setdefault(keyfn(row), []).append(row)
+    return {k: {c: round(sum((r[c] or 0) for r in rs) / len(rs)) for c in cols if c != "时间"}
+            for k, rs in buckets.items()}
 
 
 def hourly_latest(data_dir, source, date_str):
-    return _hourly_agg(data_dir, source, date_str, "last")
+    """{小时: 该小时最大时间戳的一行}。"""
+    rows, cols = _rows_in(data_dir, source, date_str)
+    return _pick(rows, cols, lambda r: int(r["时间"][11:13]), "last")
 
 
 def hourly_first(data_dir, source, date_str):
-    return _hourly_agg(data_dir, source, date_str, "first")
+    """{小时: 该小时最小时间戳的一行}。"""
+    rows, cols = _rows_in(data_dir, source, date_str)
+    return _pick(rows, cols, lambda r: int(r["时间"][11:13]), "first")
+
 
 def hourly_avg(data_dir, source, date_str):
     """{小时: {列: 该小时所有快照均值}}，瞬时量(签入/空闲/在线)用。无表/无数据返回 {}。"""
-    rows, cols = _rows_in_day(data_dir, source, date_str)
-    buckets = {}
-    for r in rows:
-        row = dict(zip(cols, r))
-        buckets.setdefault(int(row["时间"][11:13]), []).append(row)
-    out = {}
-    for hh, rs in buckets.items():
-        n = len(rs)
-        out[hh] = {c: round(sum((r[c] or 0) for r in rs) / n) for c in cols if c != "时间"}
-    return out
+    rows, cols = _rows_in(data_dir, source, date_str)
+    return _avg_buckets(rows, cols, lambda r: int(r["时间"][11:13]))
 
-def _rows_in_month(data_dir, source, ym):
-    """委托给 SQLiteReadOnlyRepository.rows_in(与 _rows_in 同实现,prefix=YYYY-MM)。"""
-    return _repo_for(data_dir).rows_in(source, ym)
 
 def daily_latest(data_dir, source, ym):
-    rows, cols = _rows_in_month(data_dir, source, ym)
-    out = {}
-    for r in rows:
-        row = dict(zip(cols, r))
-        day = int(row["时间"][8:10])
-        out[day] = row  # 升序，保留最大
-    return out
+    """{日: 当日最大时间戳的一行}。"""
+    rows, cols = _rows_in(data_dir, source, ym)
+    return _pick(rows, cols, lambda r: int(r["时间"][8:10]), "last")
+
 
 def daily_avg(data_dir, source, ym):
-    rows, cols = _rows_in_month(data_dir, source, ym)
-    buckets = {}
-    for r in rows:
-        row = dict(zip(cols, r))
-        day = int(row["时间"][8:10])
-        buckets.setdefault(day, []).append(row)
-    out = {}
-    for day, rs in buckets.items():
-        n = len(rs)
-        out[day] = {c: round(sum((r[c] or 0) for r in rs) / n) for c in cols if c != "时间"}
-    return out
+    """{日: {列: 当日所有快照均值}}。"""
+    rows, cols = _rows_in(data_dir, source, ym)
+    return _avg_buckets(rows, cols, lambda r: int(r["时间"][8:10]))
+
 
 def latest_data_date(data_dir="data"):
     """热线/在线 db 中最新的日期(YYYY-MM-DD)。委托给 SQLiteReadOnlyRepository.latest_date。
@@ -149,10 +130,8 @@ def forecast_cum_up_to(data_dir, line, date_str, cutoff_ts):
 
 def _forecast_12378_agg(data_dir, date_str, keep="last"):
     """{小时: 累计转人工量}，取 date_str 前 7 天当天 12378.db 每小时数据。"""
-    from datetime import date, timedelta
-    y, m, dd = (int(x) for x in date_str.split("-"))
-    prev = (date(y, m, dd) - timedelta(days=7)).strftime("%Y-%m-%d")
-    snap = _hourly_agg(data_dir, "12378", prev, keep)
+    prev = (_date.fromisoformat(date_str) - timedelta(days=7)).strftime("%Y-%m-%d")
+    snap = (hourly_latest if keep == "last" else hourly_first)(data_dir, "12378", prev)
     return {hh: row["转人工量"] for hh, row in snap.items()}
 
 
@@ -163,13 +142,13 @@ def forecast_12378(data_dir, date_str):
 def forecast_12378_first(data_dir, date_str):
     return _forecast_12378_agg(data_dir, date_str, "first")
 
-def _val(row, col):
-    return row[col] if row else None
+def _pluck(src, c, xs):
+    """{x: src[x][c]}，src[x] 缺失或列缺失时 None。"""
+    return {x: (src.get(x) or {}).get(c) for x in xs}
 
 def _hours_for(name, date_str):
     """12378 工作日 8-20、周末 9-17；其余 9-20。返回小时列表。"""
-    y, m, dd = (int(x) for x in date_str.split("-"))
-    if name == "12378" and _date(y, m, dd).weekday() >= 5:
+    if name == "12378" and _date.fromisoformat(date_str).weekday() >= 5:
         return list(range(9, 18))
     if name == "12378":
         return list(range(8, 21))
@@ -199,6 +178,20 @@ def _inc_col_d(first, latest, col, hours):
     f_vals = {h: row.get(col) for h, row in first.items()}
     l_vals = {h: row.get(col) for h, row in latest.items()}
     return _inc_d(f_vals, l_vals, hours)
+
+def _inc_sum(first, latest, cols, hours):
+    """多列方案D增量逐小时求和；任一分量为 None -> None（同源行完整,None 模式一致）。"""
+    incs = {c: _inc_col_d(first, latest, c, hours) for c in cols}
+    return {h: (None if any(incs[c][h] is None for c in cols)
+                else sum((incs[c][h] or 0) for c in cols)) for h in hours}
+
+def _card_in(pred, cum, zrg, succ):
+    return {
+        "预测量": pred, "时段预测量": cum,
+        "流入率": _rate(zrg, cum),
+        "转人工量": zrg, "转人工成功量": succ,
+        "接通率": _rate(succ, zrg),
+    }
 
 def build_day(date_str, data_dir="data"):
     # --- 接听各组 hourly 快照 ---
@@ -233,20 +226,10 @@ def build_day(date_str, data_dir="data"):
     inc_z_zrg = _inc_col_d(z_f, z, "转人工量", h_12378)
     inc_z_succ = _inc_col_d(z_f, z, "接通量", h_12378)
     inc_z_hf = _inc_col_d(gd_f, gd, "12378回访组", h_12378)
-    inc_c2_gda = _inc_col_d(gd_f, gd, "转接一组", h_other)
-    inc_c2_gdb = _inc_col_d(gd_f, gd, "转接二组", h_other)
-    inc_c2_gdc = _inc_col_d(gd_f, gd, "回访组一组", h_other)
-    inc_c2_gd = {h: ((inc_c2_gda[h] or 0) + (inc_c2_gdb[h] or 0) + (inc_c2_gdc[h] or 0)) if inc_c2_gdc[h] is not None else None for h in h_other}
-    inc_c2_hla = _inc_col_d(hl_f, hl, "转接一组", h_other)
-    inc_c2_hlb = _inc_col_d(hl_f, hl, "转接二组", h_other)
-    inc_c2_hlc = _inc_col_d(hl_f, hl, "回访组一组", h_other)
-    inc_c2_hl = {h: ((inc_c2_hla[h] or 0) + (inc_c2_hlb[h] or 0) + (inc_c2_hlc[h] or 0)) if inc_c2_hla[h] is not None else None for h in h_other}
-    inc_dh_gda = _inc_col_d(gd_f, gd, "贷后转接组", h_other)
-    inc_dh_gdb = _inc_col_d(gd_f, gd, "贷后回访组", h_other)
-    inc_dh_gd = {h: ((inc_dh_gda[h] or 0) + (inc_dh_gdb[h] or 0)) if inc_dh_gdb[h] is not None else None for h in h_other}
-    inc_dh_hla = _inc_col_d(hl_f, hl, "贷后转接组", h_other)
-    inc_dh_hlb = _inc_col_d(hl_f, hl, "贷后回访组", h_other)
-    inc_dh_hl = {h: ((inc_dh_hla[h] or 0) + (inc_dh_hlb[h] or 0)) if inc_dh_hla[h] is not None else None for h in h_other}
+    inc_c2_gd = _inc_sum(gd_f, gd, ("转接一组", "转接二组", "回访组一组"), h_other)
+    inc_c2_hl = _inc_sum(hl_f, hl, ("转接一组", "转接二组", "回访组一组"), h_other)
+    inc_dh_gd = _inc_sum(gd_f, gd, ("贷后转接组", "贷后回访组"), h_other)
+    inc_dh_hl = _inc_sum(hl_f, hl, ("贷后转接组", "贷后回访组"), h_other)
     inc_ks_gd = _inc_col_d(gd_f, gd, "二线客诉处理组", h_other)
     inc_cg2_gd = _inc_col_d(gd_f, gd, "常规工单处理组", h_other)
     # 预测量=每时段增量：CSV 用 forecast_increment；12378 用 7 天前累计的方案D增量
@@ -260,23 +243,23 @@ def build_day(date_str, data_dir="data"):
             "预测量": {h: fc_rx_inc.get(h, 0) for h in h_other},
             "转人工量": inc_rx_zrg,
             "转人工成功量": inc_rx_succ,
-            "签入": {h: _val(rx_seat.get(h), "签入") for h in h_other},
-            "空闲": {h: _val(rx_seat.get(h), "空闲") for h in h_other},
+            "签入": _pluck(rx_seat, "签入", h_other),
+            "空闲": _pluck(rx_seat, "空闲", h_other),
         },
         "在线": {
             "hours": h_other,
             "预测量": {h: fc_im_inc.get(h, 0) for h in h_other},
             "转人工量": inc_im_zrg,
             "转人工成功量": inc_im_succ,
-            "在线": {h: _val(im_a.get(h), "在线") for h in h_other},
+            "在线": _pluck(im_a, "在线", h_other),
         },
         "12378": {
             "hours": h_12378,
             "预测量": fc_z_inc,
             "转人工量": inc_z_zrg,
             "转人工成功量": inc_z_succ,
-            "签入": {h: _val(z_seat.get(h), "签入") for h in h_12378},
-            "空闲": {h: _val(z_seat.get(h), "空闲") for h in h_12378},
+            "签入": _pluck(z_seat, "签入", h_12378),
+            "空闲": _pluck(z_seat, "空闲", h_12378),
             "工单量": inc_z_hf,
         },
     }
@@ -291,15 +274,15 @@ def build_day(date_str, data_dir="data"):
             "hours": h_other,
             "工单量": inc_c2_gd,
             "转接量": inc_c2_hl,
-            "签入": {h: _val(cg_a.get(h), "签入") for h in h_other},
-            "空闲": {h: _val(cg_a.get(h), "空闲") for h in h_other},
+            "签入": _pluck(cg_a, "签入", h_other),
+            "空闲": _pluck(cg_a, "空闲", h_other),
         },
         "贷后二线": {
             "hours": h_other,
             "工单量": inc_dh_gd,
             "转接量": inc_dh_hl,
-            "签入": {h: _val(dh_a.get(h), "签入") for h in h_other},
-            "空闲": {h: _val(dh_a.get(h), "空闲") for h in h_other},
+            "签入": _pluck(dh_a, "签入", h_other),
+            "空闲": _pluck(dh_a, "空闲", h_other),
         },
         "二线客诉": {"hours": h_other, "工单量": inc_ks_gd},
         "常规工单": {"hours": h_other, "工单量": inc_cg2_gd},
@@ -308,14 +291,6 @@ def build_day(date_str, data_dir="data"):
     # --- current_hour：接听三组实际数据的最大小时 ---
     data_hours = sorted(set(list(rx) + list(im) + list(z)))
     cur = data_hours[-1] if data_hours else None
-
-    def _in(full, cum, zrg, succ):
-        return {
-            "预测量": full, "时段预测量": cum,
-            "流入率": _rate(zrg, cum),
-            "转人工量": zrg, "转人工成功量": succ,
-            "接通率": _rate(succ, zrg),
-        }
 
     card_in = None; card_out = None
     if cur is not None:
@@ -338,12 +313,12 @@ def build_day(date_str, data_dir="data"):
         z_zrg = z[z_cur].get("转人工量") if z_cur is not None else 0
         z_succ = z[z_cur].get("接通量") if z_cur is not None else 0
         card_in = {
-            "total": _in(rx_full + im_full + z_full, rx_cum + im_cum + z_cum,
-                         rx_zrg + im_zrg + z_zrg, rx_succ + im_succ + z_succ),
+            "total": _card_in(rx_full + im_full + z_full, rx_cum + im_cum + z_cum,
+                              rx_zrg + im_zrg + z_zrg, rx_succ + im_succ + z_succ),
             "groups": {
-                "热线": _in(rx_full, rx_cum, rx_zrg, rx_succ),
-                "在线": _in(im_full, im_cum, im_zrg, im_succ),
-                "12378": _in(z_full, z_cum, z_zrg, z_succ),
+                "热线": _card_in(rx_full, rx_cum, rx_zrg, rx_succ),
+                "在线": _card_in(im_full, im_cum, im_zrg, im_succ),
+                "12378": _card_in(z_full, z_cum, z_zrg, z_succ),
             },
         }
         # 外呼各组
@@ -415,72 +390,65 @@ def _table_header(keys):
             groups.append({"name": g, "values": [v]})
     return {"label": keys[0], "groups": groups}
 
+# 明细表字段序（决定表头列序，与 _table_header 分组一致）
+_IN_FIELDS = {
+    "热线": ["预测量", "流入率", "转人工量", "转人工成功量", "接通率", "签入", "空闲"],
+    "在线": ["预测量", "流入率", "转人工量", "转人工成功量", "接通率", "在线"],
+    "12378": ["工单量", "转人工量", "转人工成功量", "接通率", "签入", "空闲"],
+}
+_OUT_FIELDS = {
+    "常规二线": ["工单量", "转接量", "签入", "空闲"],
+    "贷后二线": ["工单量", "转接量", "签入", "空闲"],
+    "二线客诉": ["工单量"],
+    "常规工单": ["工单量"],
+}
+
+
+def _metric_row(group, src, x, fields):
+    """按字段序取该组一行指标；流入率/接通率为派生量。"""
+    d = {k: v.get(x) for k, v in src[group].items() if isinstance(v, dict)}
+    row = {}
+    for f in fields:
+        if f == "流入率":
+            row[f"{group}_流入率"] = _rate(d.get("转人工量"), d.get("预测量"))
+        elif f == "接通率":
+            row[f"{group}_接通率"] = _rate(d.get("转人工成功量"), d.get("转人工量"))
+        else:
+            row[f"{group}_{f}"] = d.get(f)
+    return row
+
+
 def _table_rows(inbound, outbound, xs, label):
-    """构造两张明细表的行。xs=小时/日列表，label='小时'/'日'。键顺序决定表头列序。"""
+    """构造两张明细表的行。xs=小时/日列表，label='小时'/'日'。字段序决定表头列序。"""
     in_rows, out_rows = [], []
     for x in xs:
-        in_rows.append({
-            label: x,
-            "热线_预测量": inbound["热线"]["预测量"].get(x),
-            "热线_流入率": _rate(inbound["热线"]["转人工量"].get(x), inbound["热线"]["预测量"].get(x)),
-            "热线_转人工量": inbound["热线"]["转人工量"].get(x),
-            "热线_转人工成功量": inbound["热线"]["转人工成功量"].get(x),
-            "热线_接通率": _rate(inbound["热线"]["转人工成功量"].get(x), inbound["热线"]["转人工量"].get(x)),
-            "热线_签入": inbound["热线"]["签入"].get(x), "热线_空闲": inbound["热线"]["空闲"].get(x),
-            "在线_预测量": inbound["在线"]["预测量"].get(x),
-            "在线_流入率": _rate(inbound["在线"]["转人工量"].get(x), inbound["在线"]["预测量"].get(x)),
-            "在线_转人工量": inbound["在线"]["转人工量"].get(x),
-            "在线_转人工成功量": inbound["在线"]["转人工成功量"].get(x),
-            "在线_接通率": _rate(inbound["在线"]["转人工成功量"].get(x), inbound["在线"]["转人工量"].get(x)),
-            "在线_在线": inbound["在线"]["在线"].get(x),
-            "12378_工单量": inbound["12378"]["工单量"].get(x),
-            "12378_转人工量": inbound["12378"]["转人工量"].get(x),
-            "12378_转人工成功量": inbound["12378"]["转人工成功量"].get(x),
-            "12378_接通率": _rate(inbound["12378"]["转人工成功量"].get(x), inbound["12378"]["转人工量"].get(x)),
-            "12378_签入": inbound["12378"]["签入"].get(x), "12378_空闲": inbound["12378"]["空闲"].get(x),
-        })
-        out_rows.append({
-            label: x,
-            "常规二线_工单量": outbound["常规二线"]["工单量"].get(x), "常规二线_转接量": outbound["常规二线"]["转接量"].get(x),
-            "常规二线_签入": outbound["常规二线"]["签入"].get(x), "常规二线_空闲": outbound["常规二线"]["空闲"].get(x),
-            "贷后二线_工单量": outbound["贷后二线"]["工单量"].get(x), "贷后二线_转接量": outbound["贷后二线"]["转接量"].get(x),
-            "贷后二线_签入": outbound["贷后二线"]["签入"].get(x), "贷后二线_空闲": outbound["贷后二线"]["空闲"].get(x),
-            "二线客诉_工单量": outbound["二线客诉"]["工单量"].get(x),
-            "常规工单_工单量": outbound["常规工单"]["工单量"].get(x),
-        })
+        in_rows.append({label: x, **{k: v for g in _IN_FIELDS
+                                     for k, v in _metric_row(g, inbound, x, _IN_FIELDS[g]).items()}})
+        out_rows.append({label: x, **{k: v for g in _OUT_FIELDS
+                                      for k, v in _metric_row(g, outbound, x, _OUT_FIELDS[g]).items()}})
     return in_rows, out_rows
 
 def _forecast_daily(data_dir, line, ym):
     """{日: 当日最大累计预估量}。"""
-    path = Path(data_dir) / "预估流入量.csv"
-    if not path.exists():
-        return {}
-    out = {}
-    with open(path, encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            if r["线路"] == line and r["时间"][:7] == ym:
-                out[int(r["时间"][8:10])] = int(r["累计预估量"])  # 升序覆盖
-    return out
+    return {int(ts[8:10]): cum for ts, _inc, cum in _forecast_rows(data_dir, line, ym)}
 
 def _forecast_12378_daily(data_dir, ym):
     """{日: 7天前当日收盘累计转人工量}。"""
-    from datetime import date as _d, timedelta as _t
     y, m = (int(x) for x in ym.split("-"))
     out = {}
-    for dd in range(1, 32):
-        try:
-            cur = _d(y, m, dd)
-        except ValueError:
-            break
-        prev = (cur - _t(days=7)).strftime("%Y-%m-%d")
+    for dd in range(1, monthrange(y, m)[1] + 1):
+        prev = (_date(y, m, dd) - timedelta(days=7)).strftime("%Y-%m-%d")
         snap = hourly_latest(data_dir, "12378", prev)
         if snap:
             mx = max(snap.values(), key=lambda r: r["时间"])
             out[dd] = mx["转人工量"]
     return out
 
+def _col_sum(src, cols, xs):
+    """{x: 各列之和}；行缺失时 None。"""
+    return {x: (sum((src.get(x) or {}).get(c) or 0 for c in cols) if src.get(x) else None) for x in xs}
+
 def build_month(ym, data_dir="data"):
-    from calendar import monthrange
     _y, _m = (int(x) for x in ym.split("-"))
     days = list(range(1, monthrange(_y, _m)[1] + 1))
 
@@ -500,45 +468,32 @@ def build_month(ym, data_dir="data"):
     fc_im = _forecast_daily(data_dir, "在线", ym)
     fc_z = _forecast_12378_daily(data_dir, ym)
 
-    def col(src, c):
-        return {dd: (src.get(dd, {}) or {}).get(c) for dd in days}
-
     inbound = {
         "热线": {"days": days, "预测量": fc_rx,
-                 "转人工量": col(rx_l, "转人工量"), "转人工成功量": col(rx_l, "接通量"),
-                 "签入": col(rx_a, "签入"), "空闲": col(rx_a, "空闲")},
+                 "转人工量": _pluck(rx_l, "转人工量", days), "转人工成功量": _pluck(rx_l, "接通量", days),
+                 "签入": _pluck(rx_a, "签入", days), "空闲": _pluck(rx_a, "空闲", days)},
         "在线": {"days": days, "预测量": fc_im,
-                 "转人工量": col(im_l, "转人工量"),
+                 "转人工量": _pluck(im_l, "转人工量", days),
                  "转人工成功量": {dd: ((im_l.get(dd, {}) or {}).get("转人工量") or 0) -
                                    ((im_l.get(dd, {}) or {}).get("转人工失败") or 0)
                                    if im_l.get(dd) else None for dd in days},
-                 "在线": col(im_a, "在线")},
+                 "在线": _pluck(im_a, "在线", days)},
         "12378": {"days": days, "预测量": fc_z,
-                  "转人工量": col(z_l, "转人工量"), "转人工成功量": col(z_l, "接通量"),
-                  "签入": col(z_a, "签入"), "空闲": col(z_a, "空闲"),
-                  "工单量": col(gd_l, "12378回访组")},
+                  "转人工量": _pluck(z_l, "转人工量", days), "转人工成功量": _pluck(z_l, "接通量", days),
+                  "签入": _pluck(z_a, "签入", days), "空闲": _pluck(z_a, "空闲", days),
+                  "工单量": _pluck(gd_l, "12378回访组", days)},
     }
     outbound = {
         "常规二线": {"days": days,
-                   "工单量": {dd: ((gd_l.get(dd, {}) or {}).get("转接一组") or 0) +
-                                 ((gd_l.get(dd, {}) or {}).get("转接二组") or 0) +
-                                 ((gd_l.get(dd, {}) or {}).get("回访组一组") or 0)
-                                 if gd_l.get(dd) else None for dd in days},
-                   "转接量": {dd: ((hl_l.get(dd, {}) or {}).get("转接一组") or 0) +
-                                 ((hl_l.get(dd, {}) or {}).get("转接二组") or 0) +
-                                 ((hl_l.get(dd, {}) or {}).get("回访组一组") or 0)
-                                 if hl_l.get(dd) else None for dd in days},
-                   "签入": col(cg_a, "签入"), "空闲": col(cg_a, "空闲")},
+                   "工单量": _col_sum(gd_l, ("转接一组", "转接二组", "回访组一组"), days),
+                   "转接量": _col_sum(hl_l, ("转接一组", "转接二组", "回访组一组"), days),
+                   "签入": _pluck(cg_a, "签入", days), "空闲": _pluck(cg_a, "空闲", days)},
         "贷后二线": {"days": days,
-                   "工单量": {dd: ((gd_l.get(dd, {}) or {}).get("贷后转接组") or 0) +
-                                 ((gd_l.get(dd, {}) or {}).get("贷后回访组") or 0)
-                                 if gd_l.get(dd) else None for dd in days},
-                   "转接量": {dd: ((hl_l.get(dd, {}) or {}).get("贷后转接组") or 0) +
-                                 ((hl_l.get(dd, {}) or {}).get("贷后回访组") or 0)
-                                 if hl_l.get(dd) else None for dd in days},
-                   "签入": col(dh_a, "签入"), "空闲": col(dh_a, "空闲")},
-        "二线客诉": {"days": days, "工单量": col(gd_l, "二线客诉处理组")},
-        "常规工单": {"days": days, "工单量": col(gd_l, "常规工单处理组")},
+                   "工单量": _col_sum(gd_l, ("贷后转接组", "贷后回访组"), days),
+                   "转接量": _col_sum(hl_l, ("贷后转接组", "贷后回访组"), days),
+                   "签入": _pluck(dh_a, "签入", days), "空闲": _pluck(dh_a, "空闲", days)},
+        "二线客诉": {"days": days, "工单量": _pluck(gd_l, "二线客诉处理组", days)},
+        "常规工单": {"days": days, "工单量": _pluck(gd_l, "常规工单处理组", days)},
     }
 
     def _sum(d):
@@ -556,13 +511,6 @@ def build_month(ym, data_dir="data"):
             out[dd] = None if (va is None and vb is None) else (va or 0) + (vb or 0)
         return out
 
-    def _in(pred, zrg, succ):
-        return {
-            "预测量": pred, "时段预测量": pred,
-            "流入率": _rate(zrg, pred),
-            "转人工量": zrg, "转人工成功量": succ,
-            "接通率": _rate(succ, zrg),
-        }
     rx_pred = _sum(fc_rx) or 0; im_pred = _sum(fc_im) or 0; z_pred = _sum(fc_z) or 0
     rx_zrg = _sum(inbound["热线"]["转人工量"]) or 0
     im_zrg = _sum(inbound["在线"]["转人工量"]) or 0
@@ -571,11 +519,12 @@ def build_month(ym, data_dir="data"):
     im_succ = _sum(inbound["在线"]["转人工成功量"]) or 0
     z_succ = _sum(inbound["12378"]["转人工成功量"]) or 0
     card_in = {
-        "total": _in(rx_pred + im_pred + z_pred, rx_zrg + im_zrg + z_zrg, rx_succ + im_succ + z_succ),
+        "total": _card_in(rx_pred + im_pred + z_pred, rx_pred + im_pred + z_pred,
+                          rx_zrg + im_zrg + z_zrg, rx_succ + im_succ + z_succ),
         "groups": {
-            "热线": _in(rx_pred, rx_zrg, rx_succ),
-            "在线": _in(im_pred, im_zrg, im_succ),
-            "12378": _in(z_pred, z_zrg, z_succ),
+            "热线": _card_in(rx_pred, rx_pred, rx_zrg, rx_succ),
+            "在线": _card_in(im_pred, im_pred, im_zrg, im_succ),
+            "12378": _card_in(z_pred, z_pred, z_zrg, z_succ),
         },
     }
     c2_gd = _sum(outbound["常规二线"]["工单量"]) or 0

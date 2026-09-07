@@ -20,7 +20,6 @@ secrets:
   tenementId: ""         # AUTOWFM_TENEMENT_ID
 storage:
   dir: "data"
-  backend: "sqlite"   # 存储后端:sqlite(默认) | postgresql(将来);Repository 模式按此切换实现
 logging:
   path: "logs/autowfm.log"
 
@@ -44,27 +43,15 @@ notify:
       "12378": ["17629050914", "18629552489", "15091009979"]
 
 forecast:
-  # 输出
-  output_dir: "output"
-  # 取数
+  # 仅机器相关的 AutoTableau 下载目录可配；其余模型参数为代码常量(peakflow/config.py)
   auto_tableau_dir: "D:/PythonProject/AutoTableau"
-  fetch_files: ["在线各类用户.csv", "热线各类用户.csv"]
-  fetch_max_age_days: 2
-  # 模型参数
-  horizon: 30
-  min_history: 28
-  trend_fit_days: 14
-  ratio_window: 14
-  backtest_window: 14
-  sigma_k: 1.0
-  trend_damp: 0.0
 
 seat_data: &seat_data
   skillCode: ""
 
 subs:
   - {name: "热线",      endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: HFQ_OFFICIAL}}
-  - {name: "12378",     endpoint: other,  screen: STATICS,    data: {skillCode: "", numberType: SERVICE_12378}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
+  - {name: "12378",     endpoint: other,  screen: STATICS,    data: {skillCode: "847", numberType: SERVICE_12378}, schedule: {weekday: {start: "08:30", end: "21:00"}, weekend: {start: "09:00", end: "18:00"}}}
   - {name: "热线明细",   endpoint: other,  screen: SEAT,       skill: "252", data: {<<: *seat_data, skillCode: "252"}}
   - {name: "常规",      endpoint: other,  screen: SEAT,       skill: "520", data: {<<: *seat_data, skillCode: "520"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 73746}}}
   - {name: "贷后",      endpoint: other,  screen: SEAT,       skill: "958", data: {<<: *seat_data, skillCode: "958"}, im: {endpoint: online, screen: IM_MONITOR, data: {skillCode: "", agentStatus: "", emailList: [], orderField: "", order: "", agentSkillCode: 82997}}}
@@ -112,31 +99,13 @@ member_limit:
     - "蒙静"
     - "米欣"
     - "段雪楠"
-    - "赵敏"
     - "丁花娟"
-    - "石凯"
-    - "贾世涛"
     - "杨晖"
     - "史立"
-    - "王玲霞"
     - "魏倩倩"
-    - "孟坤"
-    - "孟令坤"
-    - "曾小玲"
-    - "杨国蓉"
-    - "杨少晨"
-    - "魏卓怡"
-    - "张慧颖"
-    - "方珍"
-    - "王园"
-    - "王璇"
     - "田科科"
-    - "段旭"
     - "魏锋"
-    - "贺周"
     - "赵佩瑶"
-    - "荀飞扬"
-    - "候磊"
     - "黎家齐"
     - "杨诺菲"
     - "朱启佳"
@@ -148,4 +117,4 @@ member_limit:
     - "陈逸飞"
     - "吴嘉瑜"
     - "林耀俊"
-    - "房吴颉"
+    - "段林涛"

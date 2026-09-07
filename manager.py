@@ -177,13 +177,10 @@ def _pid_alive(pid: int) -> bool:
 def parse_schedule(s: str):
     """HH:MM → 当日分钟(0..1439)；非法/越界返回 None。"""
     try:
-        h, m = s.split(":")
-        h, m = int(h), int(m)
-        if 0 <= h <= 23 and 0 <= m <= 59:
-            return h * 60 + m
+        t = dt.datetime.strptime(s.strip(), "%H:%M")
     except (ValueError, AttributeError):
-        pass
-    return None
+        return None
+    return t.hour * 60 + t.minute
 
 
 def schedule_action(enabled: bool, now_mins: int, sched_mins, fired: bool) -> str:
@@ -202,27 +199,17 @@ def schedule_action(enabled: bool, now_mins: int, sched_mins, fired: bool) -> st
 
 class ManagedTask:
     def __init__(self, name: str, module: str, log_path: Path, capture_log: bool,
-                 env_extra: dict | None = None, script: str | None = None,
-                 cwd: Path | None = None, match_key: str | None = None,
-                 auto_enabled: bool = True,
-                 pre_run: str | None = None, run_target: str | None = None):
+                 env_extra: dict | None = None, cwd: Path | None = None,
+                 match_key: str | None = None, auto_enabled: bool = True,
+                 cmd: list[str] | None = None):
         self.name = name
         self.module = module                      # "collector.main" / "dashboard.app"
-        self.script = script                      # 若非 None,改为运行脚本(如排班 app.py)
         self.cwd = cwd or ROOT                    # 运行工作目录(脚本所属项目目录)
         self.match_key = match_key                # 若非 None,external-PID 按此串匹配(否则取脚本名/module)
         self.auto_enabled = auto_enabled          # False -> 仅手动启停,不自动启停/自动重启
         self.auto_start = True                    # 「自启动」勾选(UI 持久化);False -> manager 不干预该任务
-        # pre_run + run_target: 子进程先 exec(pre_run)(如 sys.path 注入/webbrowser 抑制),
-        # 再 runpy.run_path(run_target, run_name="__main__")。替代独立包装脚本(如原 shift_manager.py)
-        if pre_run and run_target:
-            launcher = (
-                "import runpy, sys; exec(sys.argv[1]); "
-                "runpy.run_path(sys.argv[2], run_name='__main__')"
-            )
-            self.cmd = [PYTHON, "-c", launcher, pre_run, run_target]
-        else:
-            self.cmd = [PYTHON, "-m", module] if script is None else [PYTHON, script]
+        # cmd 非 None 时使用显式命令(如排班的 runpy 启动器);否则 python -m module
+        self.cmd = cmd if cmd is not None else [PYTHON, "-m", module]
         self.log_path = log_path
         self.capture_log = capture_log            # True -> 把子进程 stdout 写入 log_path
         self.env_extra = env_extra or {}
@@ -252,8 +239,6 @@ class ManagedTask:
         # 优先用显式 match_key,否则脚本模式取脚本文件名,模块模式取 module 字符串
         if self.match_key:
             match_key = self.match_key
-        elif self.script:
-            match_key = self.script.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         else:
             match_key = self.module
         match_key = match_key.replace('"', '`"')
@@ -455,12 +440,16 @@ class ManagedTask:
 
 # 任务定义:看板用 AUTOWFM_DEBUG=0 关掉 reloader,单进程便于崩溃检测/停止
 # API 排在看板之前(看板依赖 API),均自动启停
-# 排班任务用 pre_run+run_target 内化原 shift_manager.py 的逻辑(sys.path 注入 + webbrowser 抑制)
+# 排班任务用 runpy 启动器内化原 shift_manager.py 的逻辑(sys.path 注入 + webbrowser 抑制)
 _SHIFT_PRE_RUN = (
     f"import sys; sys.path.insert(0, r'{ROOT / 'shift'}');\n"
     "import os, webbrowser\n"
     "if os.environ.get('AUTOWFM_MANAGED') == '1':\n"
     "    webbrowser.open = lambda url, new=0, autoraise=True: True\n"
+)
+_SHIFT_LAUNCHER = (
+    "import runpy, sys; exec(sys.argv[1]); "
+    "runpy.run_path(sys.argv[2], run_name='__main__')"
 )
 TASK_DEFS = [
     dict(name="采集器", module="collector.main", log_path=COLLECTOR_LOG, capture_log=False),
@@ -471,7 +460,7 @@ TASK_DEFS = [
     dict(name="排班", module="", log_path=SHIFT_LOG, capture_log=True,
          cwd=ROOT, match_key="app.py",
          env_extra={"AUTOWFM_MANAGED": "1"}, auto_enabled=False,
-         pre_run=_SHIFT_PRE_RUN, run_target=str(ROOT / "shift" / "app.py")),
+         cmd=[PYTHON, "-c", _SHIFT_LAUNCHER, _SHIFT_PRE_RUN, str(ROOT / "shift" / "app.py")]),
 ]
 
 
@@ -529,9 +518,6 @@ class ManagerUI:
                 "src": tk.StringVar(value=""),
             }
             self._vars.append(vars_)
-            dot = tk.Label(strip, text="●", font=("Microsoft YaHei UI", 12), fg="#666666")
-            dot.grid(row=r, column=0, padx=(0, 6), sticky="w")
-            vars_["status_dot"] = dot
             tk.Label(strip, text=task.name, font=("Microsoft YaHei UI", 11, "bold")).grid(row=r, column=1, padx=(0, 10), sticky="w")
             status_lbl = tk.Label(strip, textvariable=vars_["status"], font=("Microsoft YaHei UI", 13, "bold"))
             status_lbl.grid(row=r, column=2, padx=(0, 12), sticky="w")
@@ -651,29 +637,49 @@ class ManagerUI:
     def _update_status(self) -> None:
         for task, vars_ in zip(self.tasks, self._vars):
             if task.is_running():
-                vars_["status"].set("运行中")
-                vars_["status_label"].configure(fg="#16803c")
-                vars_["status_dot"].configure(fg="#16803c")
-                vars_["pid"].set(f"PID: {task.process.pid}")
-                vars_["src"].set("UI 管理")
+                text, color, pid, src = "运行中", "#16803c", f"PID: {task.process.pid}", "UI 管理"
             elif task.external_pid:
-                vars_["status"].set("运行中(外部)")
-                vars_["status_label"].configure(fg="#16803c")
-                vars_["status_dot"].configure(fg="#16803c")
-                vars_["pid"].set(f"PID: {task.external_pid}")
-                vars_["src"].set("外部启动")
+                text, color, pid, src = "运行中(外部)", "#16803c", f"PID: {task.external_pid}", "外部启动"
+            elif task.restart_failures >= MAX_FAILURES:
+                text, color, pid, src = "已暂停重启", "#aa2222", "PID: -", ""
             else:
-                if task.restart_failures >= MAX_FAILURES:
-                    vars_["status"].set("已暂停重启")
-                    vars_["status_label"].configure(fg="#aa2222")
-                    vars_["status_dot"].configure(fg="#aa2222")
-                else:
-                    vars_["status"].set("未运行")
-                    vars_["status_label"].configure(fg="#aa2222")
-                    vars_["status_dot"].configure(fg="#aa2222")
-                vars_["pid"].set("PID: -")
-                vars_["src"].set("")
+                text, color, pid, src = "未运行", "#aa2222", "PID: -", ""
+            vars_["status"].set(text)
+            vars_["status_label"].configure(fg=color)
+            vars_["pid"].set(pid)
+            vars_["src"].set(src)
             vars_["fail"].set(f"失败: {task.restart_failures}/{MAX_FAILURES}")
+
+    # ---- 只读文本框助手(置为可编辑-改内容-恢复只读,日志页与工具页共用)----
+    def _box_set(self, box, text: str) -> None:
+        box.configure(state=tk.NORMAL)
+        box.delete("1.0", tk.END)
+        box.insert(tk.END, text)
+        box.see(tk.END)
+        box.configure(state=tk.DISABLED)
+
+    def _box_append(self, box, text: str, log_path: Path | None = None) -> None:
+        box.configure(state=tk.NORMAL)
+        box.insert(tk.END, text + "\n")
+        box.see(tk.END)
+        box.configure(state=tk.DISABLED)
+        if log_path is not None:
+            try:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(text + "\n")
+            except Exception:
+                pass
+
+    def _run_bg(self, fn, on_done, name: str) -> None:
+        """后台线程执行 fn，结果/异常经 root.after 回调 on_done(result, err) 回主线程。"""
+        def worker():
+            try:
+                result = fn()
+                self.root.after(0, on_done, result, None)
+            except Exception as exc:
+                log.exception("%s 后台任务失败", name)
+                self.root.after(0, on_done, "", exc)
+        threading.Thread(target=worker, daemon=True, name=name).start()
 
     # ---- 日志预览 ----
     def _load_logs(self) -> None:
@@ -682,11 +688,7 @@ class ManagerUI:
             if not lines:
                 hint = "尚未找到日志。" if not task.capture_log else f"等待 {task.name} 输出(写入 {task.log_path})。"
                 lines = [hint + "\n"]
-            box.configure(state=tk.NORMAL)
-            box.delete("1.0", tk.END)
-            box.insert(tk.END, "".join(lines))
-            box.see(tk.END)
-            box.configure(state=tk.DISABLED)
+            self._box_set(box, "".join(lines))
 
     @staticmethod
     def _tail(path: Path, max_lines: int) -> list[str]:
@@ -706,17 +708,8 @@ class ManagerUI:
                 self.root.lift()
         except Exception:
             pass
-        popup = tk.Toplevel(self.root)
-        popup.title(title)
-        popup.attributes("-topmost", True)
-        popup.geometry("480x240")
-        popup.resizable(False, False)
-        popup.grab_set()
-        tk.Label(popup, text=title, font=("Microsoft YaHei UI", 14, "bold"), fg="#aa2222").pack(pady=(18, 8))
-        tk.Label(popup, text=f"{message}\n\n时间: {dt.datetime.now():%Y-%m-%d %H:%M:%S}", justify=tk.LEFT, wraplength=440).pack(padx=20, pady=8, fill=tk.X)
-        tk.Button(popup, text="知道了", width=12, command=popup.destroy).pack(pady=12)
-        popup.lift()
-        popup.focus_force()
+        messagebox.showerror(title, f"{message}\n\n时间: {dt.datetime.now():%Y-%m-%d %H:%M:%S}",
+                             parent=self.root)
 
     # ---- 托盘 + 退出 ----
     def _on_close(self) -> None:
@@ -814,54 +807,40 @@ class ManagerUI:
         self.forecast_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
         self.forecast_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
         self.forecast_box.configure(state=tk.DISABLED)
-        self._set_forecast_text(
+        self._box_set(
+            self.forecast_box,
             "点「运行预测(30天)」从 AutoTableau 同步最新数据并预测未来 30 天。\n"
             "每天 09:30 Windows 计划任务自动运行。\n"
             "输出: output/YYYY-MM-DD/预测_YYYYMMDD_未来30天.xlsx + .html")
 
-    def _set_forecast_text(self, text: str) -> None:
-        self.forecast_box.configure(state=tk.NORMAL)
-        self.forecast_box.delete("1.0", tk.END)
-        self.forecast_box.insert(tk.END, text)
-        self.forecast_box.configure(state=tk.DISABLED)
-
-    def _set_forecast_status(self, s: str) -> None:
-        self.forecast_status_var.set(s)
-
     def _run_forecast(self) -> None:
-        self._set_forecast_status("运行中...")
-        self._set_forecast_text("正在同步数据并预测，请稍候...")
+        self.forecast_status_var.set("运行中...")
+        self._box_set(self.forecast_box, "正在同步数据并预测，请稍候...")
         self.btn_forecast.configure(state=tk.DISABLED)
 
-        def worker():
-            try:
-                from peakflow.main import run_forecast
-                out_path = run_forecast(fetch=True)
-                summary = self._forecast_summary(out_path)
-                self.root.after(0, self._on_forecast_done, summary, None)
-            except Exception as exc:
-                log.exception("手动预测失败")
-                self.root.after(0, self._on_forecast_done, "", exc)
+        def fn():
+            from peakflow.main import run_forecast
+            out_path = run_forecast(fetch=True)
+            return self._forecast_summary(out_path)
 
-        threading.Thread(target=worker, daemon=True, name="forecast").start()
+        self._run_bg(fn, self._on_forecast_done, "forecast")
 
     def _on_forecast_done(self, summary: str, err: Exception | None) -> None:
         self.btn_forecast.configure(state=tk.NORMAL)
         if err is not None:
-            self._set_forecast_status("失败")
-            self._set_forecast_text(
+            self.forecast_status_var.set("失败")
+            self._box_set(self.forecast_box, 
                 f"预测失败: {err}\n\n常见原因:\n"
                 "- AutoTableau 下载目录无最新数据\n"
                 "- data/ 缺少 CSV 文件\n"
                 "- 历史数据不足（<21 天会直接失败；建议 ≥28 天）\n请查看 logs/manager.log")
         else:
-            self._set_forecast_status("完成")
-            self._set_forecast_text(summary)
+            self.forecast_status_var.set("完成")
+            self._box_set(self.forecast_box, summary)
 
     @staticmethod
     def _forecast_summary(out_path) -> str:
         """展示 Excel 路径和基本信息。"""
-        from pathlib import Path
         path = Path(out_path)
         lines = [
             f"预测完成！",
@@ -894,81 +873,62 @@ class ManagerUI:
         self.bf_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
         self.bf_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
         self.bf_box.configure(state=tk.DISABLED)
-        self._set_backfill_text(
+        self._box_set(
+            self.bf_box,
             "输入开始/结束日期(YYYY-MM-DD，结束留空=单日)，勾选源后点「开始补全」。\n"
             "按 5 分钟颗粒度回填历史数据(总是覆盖)。含今天时建议先停采集器。")
-
-    def _set_backfill_text(self, text: str) -> None:
-        self.bf_box.configure(state=tk.NORMAL)
-        self.bf_box.delete("1.0", tk.END)
-        self.bf_box.insert(tk.END, text)
-        self.bf_box.configure(state=tk.DISABLED)
-
-    def _append_backfill_text(self, text: str) -> None:
-        self.bf_box.configure(state=tk.NORMAL)
-        self.bf_box.insert(tk.END, text + "\n")
-        self.bf_box.see(tk.END)
-        self.bf_box.configure(state=tk.DISABLED)
-
-    def _set_backfill_status(self, s: str) -> None:
-        self.bf_status_var.set(s)
 
     def _run_backfill(self) -> None:
         if self._backfill_running:
             return
-        from datetime import datetime as _dt
         start = self.bf_start_var.get().strip()
         end = self.bf_end_var.get().strip() or start
         try:
-            _dt.strptime(start, "%Y-%m-%d")
-            _dt.strptime(end, "%Y-%m-%d")
+            dt.datetime.strptime(start, "%Y-%m-%d")
+            dt.datetime.strptime(end, "%Y-%m-%d")
         except ValueError:
-            self._set_backfill_status("日期格式错误"); return
+            self.bf_status_var.set("日期格式错误"); return
         if start > end:
-            self._set_backfill_status("开始>结束"); return
+            self.bf_status_var.set("开始>结束"); return
         sources = []
         if self.bf_src_hl.get(): sources.append("会话记录")
         if self.bf_src_gd.get(): sources.append("工单明细")
         if not sources:
-            self._set_backfill_status("请至少勾一个源"); return
-        today = _dt.now().strftime("%Y-%m-%d")
+            self.bf_status_var.set("请至少勾一个源"); return
+        today = dt.datetime.now().strftime("%Y-%m-%d")
         warn = ("\n\n⚠ 含今天；若采集器在跑，今天的快照会与采集器 5 分钟快照混合(口径一致)，"
                 "建议先停采集器再补今天。") if start <= today <= end else ""
-        self._set_backfill_status("运行中...")
-        self._set_backfill_text("正在补全，请稍候..." + warn)
+        self.bf_status_var.set("运行中...")
+        self._box_set(self.bf_box, "正在补全，请稍候..." + warn)
         self.btn_backfill.configure(state=tk.DISABLED)
         self._backfill_running = True
 
-        def worker():
-            try:
-                from collector import backfill
-                days = backfill.iter_days(start, end)
-                data_dir = self.cfg["storage"]["dir"]
-                parts = []
-                for src in sources:
-                    res = backfill.backfill_source(src, self.cfg, days, data_dir,
-                                                   overwrite=True, progress_cb=self._on_backfill_progress)
-                    parts.append(f"{src}: 成功 {res['成功']} 失败 {res['失败']}"
-                                 + (f"({','.join(res['失败日期'])})" if res['失败日期'] else ""))
-                self.root.after(0, self._on_backfill_done, "\n".join(parts), None)
-            except Exception as exc:
-                log.exception("手动补全失败")
-                self.root.after(0, self._on_backfill_done, "", exc)
+        def fn():
+            from collector import backfill
+            days = backfill.iter_days(start, end)
+            data_dir = self.cfg["storage"]["dir"]
+            parts = []
+            for src in sources:
+                res = backfill.backfill_source(src, self.cfg, days, data_dir,
+                                               overwrite=True, progress_cb=self._on_backfill_progress)
+                parts.append(f"{src}: 成功 {res['成功']} 失败 {res['失败']}"
+                             + (f"({','.join(res['失败日期'])})" if res['失败日期'] else ""))
+            return "\n".join(parts)
 
-        threading.Thread(target=worker, daemon=True, name="backfill").start()
+        self._run_bg(fn, self._on_backfill_done, "backfill")
 
     def _on_backfill_progress(self, text: str) -> None:
-        self.root.after(0, self._append_backfill_text, text)
+        self.root.after(0, self._box_append, self.bf_box, text)
 
     def _on_backfill_done(self, summary: str, err: Exception | None) -> None:
         self._backfill_running = False
         self.btn_backfill.configure(state=tk.NORMAL)
         if err is not None:
-            self._set_backfill_status("失败")
-            self._append_backfill_text(f"\n补全失败: {err}\n详见 logs/manager.log")
+            self.bf_status_var.set("失败")
+            self._box_append(self.bf_box, f"\n补全失败: {err}\n详见 logs/manager.log")
         else:
-            self._set_backfill_status("完成")
-            self._append_backfill_text("\n=== 汇总 ===\n" + summary)
+            self.bf_status_var.set("完成")
+            self._box_append(self.bf_box, "\n=== 汇总 ===\n" + summary)
 
     # ---- 接待上限批量修改 ----
     def _build_member_limit_page(self, page: tk.Frame) -> None:
@@ -1013,36 +973,20 @@ class ManagerUI:
         self.ml_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
         self.ml_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
         self.ml_box.configure(state=tk.DISABLED)
-        self._set_member_limit_text(
+        self._box_set(
+            self.ml_box,
             "手动执行：填上限值后点「开始执行」；运行中可点「停止」逐人中断。\n"
             "预约执行：勾选启用 + 填 HH:MM 时间与上限值，到点自动执行一次后清除。\n"
             "日志同时写入 logs/member_limit.log。")
 
-    def _set_member_limit_text(self, text: str) -> None:
-        self.ml_box.configure(state=tk.NORMAL)
-        self.ml_box.delete("1.0", tk.END)
-        self.ml_box.insert(tk.END, text)
-        self.ml_box.configure(state=tk.DISABLED)
-
     def _append_member_limit_text(self, text: str) -> None:
-        self.ml_box.configure(state=tk.NORMAL)
-        self.ml_box.insert(tk.END, text + "\n")
-        self.ml_box.see(tk.END)
-        self.ml_box.configure(state=tk.DISABLED)
-        try:
-            with open(MEMBER_LIMIT_LOG, "a", encoding="utf-8") as f:
-                f.write(text + "\n")
-        except Exception:
-            pass
-
-    def _set_member_limit_status(self, s: str) -> None:
-        self.ml_status_var.set(s)
+        self._box_append(self.ml_box, text, MEMBER_LIMIT_LOG)
 
     def _manual_member_limit(self) -> None:
         try:
             limit = int(self.ml_limit_var.get().strip())
         except ValueError:
-            self._set_member_limit_status("上限需为数字")
+            self.ml_status_var.set("上限需为数字")
             return
         self._run_member_limit(limit, "手动执行")
 
@@ -1052,45 +996,39 @@ class ManagerUI:
             self._append_member_limit_text(f"[{label}] 已有执行在跑，本次触发跳过")
             return False
         if limit <= 0:
-            self._set_member_limit_status("上限无效")
+            self.ml_status_var.set("上限无效")
             self._append_member_limit_text(f"[{label}] 上限需为正整数")
             return False
         members = (self.cfg.get("member_limit") or {}).get("members") or []
         if not members:
-            self._set_member_limit_status("名单为空")
+            self.ml_status_var.set("名单为空")
             self._append_member_limit_text("config.yaml 的 member_limit.members 为空，请先配置")
             return False
         self._ml_running = True
         self._ml_cancel = False
         self.btn_ml_start.configure(state=tk.DISABLED)
         self.btn_ml_stop.configure(state=tk.NORMAL)
-        self._set_member_limit_status("运行中...")
-        self._set_member_limit_text(f"[{label}] 开始，目标上限 = {limit}，成员 {len(members)} 人")
+        self.ml_status_var.set("运行中...")
+        self._box_set(self.ml_box, f"[{label}] 开始，目标上限 = {limit}，成员 {len(members)} 人")
 
-        def worker():
-            try:
-                from member_limit.config import ConfigError, load as ml_load
-                from member_limit.core import run_member_limit
-                cfg = ml_load()
-                cfg["limit"] = limit
-                summary = run_member_limit(
-                    cfg,
-                    progress_cb=self._on_member_limit_progress,
-                    should_cancel=lambda: self._ml_cancel,
-                )
-                self.root.after(0, self._on_member_limit_done, summary, None, label)
-            except ConfigError as exc:
-                self.root.after(0, self._on_member_limit_done, "", exc, label)
-            except Exception as exc:
-                log.exception("接待上限执行失败")
-                self.root.after(0, self._on_member_limit_done, "", exc, label)
+        def fn():
+            from member_limit.config import load as ml_load
+            from member_limit.core import run_member_limit
+            cfg = ml_load()
+            cfg["limit"] = limit
+            return run_member_limit(
+                cfg,
+                progress_cb=self._on_member_limit_progress,
+                should_cancel=lambda: self._ml_cancel,
+            )
 
-        threading.Thread(target=worker, daemon=True, name="member_limit").start()
+        self._run_bg(fn, lambda summary, err: self._on_member_limit_done(summary, err, label),
+                     "member_limit")
         return True
 
     def _stop_member_limit(self) -> None:
         self._ml_cancel = True
-        self._set_member_limit_status("停止中...")
+        self.ml_status_var.set("停止中...")
         self._append_member_limit_text(">> 已请求停止（当前成员完成后退出）")
         self.btn_ml_stop.configure(state=tk.DISABLED)
 
@@ -1102,13 +1040,13 @@ class ManagerUI:
         self.btn_ml_start.configure(state=tk.NORMAL)
         self.btn_ml_stop.configure(state=tk.DISABLED)
         if err is not None:
-            self._set_member_limit_status("失败")
+            self.ml_status_var.set("失败")
             self._append_member_limit_text(f"\n[{label}] 执行失败: {err}")
             for st in self._ml_sched:
                 if st["status"].get() == "执行中":
                     st["status"].set("已失败")
             return
-        self._set_member_limit_status("完成")
+        self.ml_status_var.set("完成")
         # 汇总已在 core.run_member_limit 经 progress_cb 输出,这里不再重复打印
         for st in self._ml_sched:
             if st["status"].get() == "执行中":

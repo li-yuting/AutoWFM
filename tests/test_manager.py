@@ -148,8 +148,8 @@ def test_tick_no_duplicate_auto_start():
 
 def test_tick_manual_only_no_auto_start_stop():
     """auto_enabled=False 的任务:不做自动启停、不做崩溃自动重启,完全手动控制。"""
-    task = ManagedTask(name="手动-only", module="", log_path=Path("nul"), capture_log=False,
-                       script="app.py", auto_enabled=False)
+    task = ManagedTask(name="手动-only", module="app.py", log_path=Path("nul"), capture_log=False,
+                       auto_enabled=False)
     # 窗口内 tick 不应自动启动(默认关闭)
     with patch("manager.subprocess.Popen") as popen:
         events = task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
@@ -234,7 +234,7 @@ def test_update_status_sets_dot():
             proc = MagicMock(); proc.poll.return_value = None; proc.pid = 12345
             task.process = proc
             ui._update_status()
-            assert ui._vars[0]["status_dot"].cget("fg") == "#16803c", "运行中状态点应为绿 #16803c"
+            assert ui._vars[0]["status_label"].cget("fg") == "#16803c", "运行中状态文字应为绿 #16803c"
         finally:
             root.destroy()
     print("update_status_sets_dot OK")
@@ -253,12 +253,12 @@ def test_update_status_states():
             task.restart_failures = 3
             ui._update_status()
             assert ui._vars[0]["status"].get() == "已暂停重启"
-            assert ui._vars[0]["status_dot"].cget("fg") == "#aa2222"
+            assert ui._vars[0]["status_label"].cget("fg") == "#aa2222"
             # 未熔断且无进程 -> 未运行(红)
             task.restart_failures = 0
             ui._update_status()
             assert ui._vars[0]["status"].get() == "未运行"
-            assert ui._vars[0]["status_dot"].cget("fg") == "#aa2222"
+            assert ui._vars[0]["status_label"].cget("fg") == "#aa2222"
         finally:
             root.destroy()
     print("update_status_states OK")

@@ -45,6 +45,16 @@ def build_summary(changed, already, unverified, failed, not_found,
     }
 
 
+# 汇总行模板: (标签, 汇总键, 元素格式化)。行元素为 str 时原样拼接。
+_SUMMARY_ROWS = [
+    ("修改成功", "changed", lambda r: f"{r[0]}({r[1]}->{r[2]})"),
+    ("本来已达标", "already", lambda r: r[0]),
+    ("提交未校验", "unverified", lambda r: r),
+    ("修改失败", "failed", lambda r: r),
+    ("未找到", "not_found", lambda r: r),
+]
+
+
 def format_summary(s: dict) -> str:
     lines = []
     if s["dry_run"]:
@@ -55,27 +65,12 @@ def format_summary(s: dict) -> str:
     lines.append(f"共处理 {total} 人")
     if s["cancelled"]:
         lines.append("[已取消] 执行被手动停止（以下为已处理部分）")
-    if s["changed"]:
-        lines.append(f"[修改成功] {len(s['changed'])} 人：" +
-                     ", ".join(f"{n}({o}->{nw})" for n, o, nw in s["changed"]))
-    else:
-        lines.append("[修改成功] 0 人：无")
-    if s["already"]:
-        lines.append(f"[本来已达标] {len(s['already'])} 人：" + ", ".join(n for n, _ in s["already"]))
-    else:
-        lines.append("[本来已达标] 0 人：无")
-    if s["unverified"]:
-        lines.append(f"[提交未校验] {len(s['unverified'])} 人：" + ", ".join(s["unverified"]))
-    else:
-        lines.append("[提交未校验] 0 人：无")
-    if s["failed"]:
-        lines.append(f"[修改失败] {len(s['failed'])} 人：" + ", ".join(s["failed"]))
-    else:
-        lines.append("[修改失败] 0 人：无")
-    if s["not_found"]:
-        lines.append(f"[未找到] {len(s['not_found'])} 人：" + ", ".join(s["not_found"]))
-    else:
-        lines.append("[未找到] 0 人：无")
+    for label, key, fmt in _SUMMARY_ROWS:
+        rows = s[key]
+        if rows:
+            lines.append(f"[{label}] {len(rows)} 人：" + ", ".join(fmt(r) for r in rows))
+        else:
+            lines.append(f"[{label}] 0 人：无")
     return "\n".join(lines)
 
 

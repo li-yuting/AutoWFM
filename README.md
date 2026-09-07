@@ -7,7 +7,7 @@
 | 子系统 | 入口 | 职责 |
 |--------|------|------|
 | 采集器 | `python -m collector.main` | 每 5 分钟按各自时间窗口采集 7 路 WS 监控 + 2 路 CRM 明细（会话记录/工单明细），写入 `data/*.db` |
-| 看板 | `python -m dashboard.app` | 只读 Flask 网页（:8080），经 `api_client.py` 调 FastAPI 渲染 9 个库；API 不可用时降级直连 `queries.py` |
+| 看板 | `python -m dashboard.app` | 只读 Flask 网页（:8080），直连 `queries.py` 渲染 9 个库 |
 | API | `python -m api.app` | FastAPI 只读层（:8081），看板与第三方的统一数据出口 |
 | 排班 | `manager.py` 监管 | `shift/` Flask 子项目：排班计划导入、校验、生成 |
 | 接待上限 | `member_limit/` | headless 批量改腾讯云联络中心成员接待上限，manager.py「接待上限」页手动/预约执行 |
@@ -42,10 +42,9 @@ AutoWFM/
 │   └── dashboard_template.html
 ├── dashboard/          # 看板（只读）
 │   ├── app.py          # Flask 路由 + Bearer 认证
-│   ├── api_client.py   # FastAPI（:8081）客户端，失败抛 ApiUnavailableError
 │   ├── queries.py      # 数据层：小时/按日聚合（增量、均值、预测）
 │   └── templates/dashboard.html
-├── api/                # FastAPI 只读层（:8081）
+├── api/                # FastAPI 只读层（:8081，供第三方消费）
 │   └── app.py
 ├── shift/              # 排班子项目（Flask：计划导入/校验/生成）
 ├── writeforecast/      # 周度预估 Excel → CSV 转换
@@ -54,7 +53,6 @@ AutoWFM/
 ├── config.yaml         # 采集/告警/预测配置（已入库；敏感值用占位符，真实密钥在 .env）
 ├── config.example.yaml # 无密钥配置模板
 ├── .env / .env.example # 密钥（git-ignored）/ 模板
-├── holidays.txt        # 预测节假日
 └── AGENTS.md           # 仓库开发指南
 ```
 

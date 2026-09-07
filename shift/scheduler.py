@@ -51,7 +51,7 @@ def run_scheduler(schedule: Schedule, config: SchedulerConfig) -> Schedule:
 
 def precompute(schedule: Schedule, config: SchedulerConfig) -> None:
     adjusted = [
-        AdjustedDemand(date=d.date, original=dict(d.demand), adjusted=dict(d.demand))
+        AdjustedDemand(date=d.date, adjusted=dict(d.demand))
         for d in schedule.demands
     ]
     schedule.adjusted_demands = adjusted
@@ -472,18 +472,13 @@ def _pull_z_blocks_to_off(schedule: Schedule, employee: Employee, config: Schedu
 
 
 def _can_place_z(schedule: Schedule, employee: Employee, day_index: int, config: SchedulerConfig) -> bool:
-    """day_index 能否改为 Z（不动格，试空后校验）。"""
+    """day_index 能否改为 Z（前置守卫 + 复用 _can_hold_shift 的置空试排）。"""
     cell = employee.schedule[day_index]
     if cell.is_locked or cell.is_historical or cell.base_shift not in WORK_SHIFTS or cell.base_shift in Z_FAMILY:
         return False
     if not _demand_ok_removing(schedule, day_index, cell.base_shift, employee.coefficient, config):
         return False
-    old = cell.value
-    cell.value = None
-    try:
-        return _can_assign_shift(schedule, employee, day_index, "Z", config)
-    finally:
-        cell.value = old
+    return _can_hold_shift(schedule, employee, day_index, "Z", config)
 
 
 def _convert_to_z(schedule: Schedule, employee: Employee, day_index: int, config: SchedulerConfig) -> bool:
@@ -719,37 +714,6 @@ def redistribute_balance(schedule: Schedule, config: SchedulerConfig) -> None:
                 break
 
 
-def _off_over_days(schedule: Schedule, config: SchedulerConfig) -> list[int]:
-    return sorted(
-        (
-            idx
-            for idx in schedule.active_indexes
-            if _actual(schedule, idx, REST_SHIFT)
-            > schedule.adjusted_demands[idx].get(REST_SHIFT) + config.demand_tolerance
-        ),
-        key=lambda idx: _actual(schedule, idx, REST_SHIFT)
-        - schedule.adjusted_demands[idx].get(REST_SHIFT),
-        reverse=True,
-    )
-
-
-def _rest_receiver_days(schedule: Schedule, over_idx: int, coefficient: float) -> list[int]:
-    over_excess = _actual(schedule, over_idx, REST_SHIFT) - schedule.adjusted_demands[over_idx].get(REST_SHIFT)
-    return sorted(
-        (
-            idx
-            for idx in schedule.active_indexes
-            if idx != over_idx
-            and _actual(schedule, idx, REST_SHIFT)
-            - schedule.adjusted_demands[idx].get(REST_SHIFT)
-            + coefficient
-            < over_excess - 0.01
-        ),
-        key=lambda idx: _actual(schedule, idx, REST_SHIFT)
-        - schedule.adjusted_demands[idx].get(REST_SHIFT),
-    )
-
-
 def _generated_rest_employees(schedule: Schedule, day_index: int) -> list[Employee]:
     return sorted(
         (
@@ -761,48 +725,6 @@ def _generated_rest_employees(schedule: Schedule, day_index: int) -> list[Employ
         ),
         key=lambda employee: (employee.coefficient, employee.group, employee.name),
     )
-
-
-def _try_swap_rest_to_under_day(
-    schedule: Schedule,
-    employee: Employee,
-    over_idx: int,
-    under_idx: int,
-    over_excess: float,
-    config: SchedulerConfig,
-) -> bool:
-    over_cell = employee.schedule[over_idx]
-    under_cell = employee.schedule[under_idx]
-    under_shift = under_cell.base_shift
-    if under_cell.is_locked or under_cell.is_historical or under_shift not in WORK_SHIFTS:
-        return False
-    if schedule.adjusted_demands[over_idx].get(under_shift) - _actual(schedule, over_idx, under_shift) <= config.demand_tolerance:
-        return False
-
-    over_target = schedule.adjusted_demands[over_idx].get(REST_SHIFT)
-    under_target = schedule.adjusted_demands[under_idx].get(REST_SHIFT)
-    if _actual(schedule, over_idx, REST_SHIFT) - employee.coefficient < over_target - config.demand_tolerance:
-        return False
-    if _actual(schedule, under_idx, REST_SHIFT) + employee.coefficient - under_target >= over_excess - 0.01:
-        return False
-
-    old_over = over_cell.value
-    old_under = under_cell.value
-    over_cell.value = under_shift
-    under_cell.value = None
-    try:
-        if not _can_assign_rest(schedule, employee, under_idx, config):
-            return False
-        under_cell.value = REST_SHIFT
-        over_cell.value = None
-        if not _can_assign_shift(schedule, employee, over_idx, under_shift, config):
-            return False
-        over_cell.value = old_under
-        return True
-    finally:
-        if not (over_cell.value == old_under and under_cell.value == REST_SHIFT):
-            over_cell.value = old_over
-            under_cell.value = old_under
 
 
 def _convert_evenly(
@@ -850,12 +772,13 @@ def _can_assign_rest(
     cell = employee.schedule[day_index]
     if cell.is_locked or cell.is_historical or not cell.is_blank:
         return False
-    if _consecutive_count(employee, day_index, REST_SHIFT) > config.max_consecutive_rest:
+    if 1 + _same_group_count(employee, day_index - 1, -1, {REST_SHIFT}) \
+            + _same_group_count(employee, day_index + 1, 1, {REST_SHIFT}) > config.max_consecutive_rest:
         return False
     if _is_high_limited(employee, day_index - 1):
         # 高强班（D/D1/Z/Z1）次日不能是 OFF：排休息时不得紧贴前一日的自家高强班
         return False
-    return _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+    return _rest_block_spacing_ok(employee, day_index, config)
 
 
 def _can_assign_shift(
@@ -949,8 +872,9 @@ def _fallback_shift(
     return "A3"
 
 
-def _rest_block_spacing_ok(employee: Employee, day_index: int, min_work_days: int) -> bool:
+def _rest_block_spacing_ok(employee: Employee, day_index: int, config: SchedulerConfig) -> bool:
     blocks = _rest_blocks(employee, assume_rest_index=day_index)
+    min_work_days = config.min_work_days_between_rest_blocks
     assumed_block_index = None
     for idx, (start, end) in enumerate(blocks):
         if start <= day_index <= end:
@@ -998,7 +922,7 @@ def _try_rest_with_high_conversion(
     prev_cell.value = replacement
     if (
         _rest_streak_at(employee, day_index) <= config.max_consecutive_rest
-        and _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+        and _rest_block_spacing_ok(employee, day_index, config)
         and _neighbors_valid(schedule, employee, day_index, config)
         and _neighbors_valid(schedule, employee, prev_idx, config)
     ):
@@ -1018,7 +942,7 @@ def _move_rest_to_day(
     cell.value = REST_SHIFT
     if (
         _rest_streak_at(employee, day_index) <= config.max_consecutive_rest
-        and _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+        and _rest_block_spacing_ok(employee, day_index, config)
         and _neighbors_valid(schedule, employee, day_index, config)
     ):
         return True
@@ -1044,7 +968,7 @@ def _move_rest_to_day(
                 rest_cell.value = shift
                 if (
                     _rest_streak_at(employee, day_index) <= config.max_consecutive_rest
-                    and _rest_block_spacing_ok(employee, day_index, config.min_work_days_between_rest_blocks)
+                    and _rest_block_spacing_ok(employee, day_index, config)
                     and _neighbors_valid(schedule, employee, day_index, config)
                     and _neighbors_valid(schedule, employee, rest_idx, config)
                 ):
@@ -1211,7 +1135,7 @@ def _find_rest_donor(
             continue
         if _is_rest(employee, day_index - 1) or _is_rest(employee, day_index + 1):
             continue
-        if _work_count_if_day_becomes_work(employee, day_index) > _max_work_days(employee, config):
+        if _consecutive_work_count(employee, day_index, "A2") > _max_work_days(employee, config):
             continue
         return employee
     return None
@@ -1242,28 +1166,9 @@ def _work_streak_before(employee: Employee, day_index: int) -> int:
     return streak
 
 
-def _consecutive_count(employee: Employee, day_index: int, shift: str) -> int:
-    return 1 + _same_count(employee, day_index - 1, -1, shift) + _same_count(employee, day_index + 1, 1, shift)
-
-
 def _consecutive_work_count(employee: Employee, day_index: int, shift: str) -> int:
     if shift not in WORK_SHIFTS:
         return 0
-    count = 1
-    for idx in range(day_index - 1, -1, -1):
-        if employee.schedule[idx].base_shift in WORK_SHIFTS:
-            count += 1
-        else:
-            break
-    for idx in range(day_index + 1, len(employee.schedule)):
-        if employee.schedule[idx].base_shift in WORK_SHIFTS:
-            count += 1
-        else:
-            break
-    return count
-
-
-def _work_count_if_day_becomes_work(employee: Employee, day_index: int) -> int:
     count = 1
     for idx in range(day_index - 1, -1, -1):
         if employee.schedule[idx].base_shift in WORK_SHIFTS:
@@ -1349,15 +1254,6 @@ def _a_run_touches_z(employee: Employee, start: int, step: int) -> bool:
         idx += step
     beyond = idx + step
     return 0 <= beyond < len(employee.schedule) and employee.schedule[beyond].base_shift in Z_FAMILY
-
-
-def _same_count(employee: Employee, start: int, step: int, shift: str) -> int:
-    count = 0
-    idx = start
-    while 0 <= idx < len(employee.schedule) and employee.schedule[idx].base_shift == shift:
-        count += 1
-        idx += step
-    return count
 
 
 def _same_group_count(employee: Employee, start: int, step: int, shifts: set[str]) -> int:

@@ -36,7 +36,6 @@ def test_read_empty():
     r = SQLiteReadOnlyRepository(d)
     rows, cols = r.rows_in("热线", "2026-07-27")
     assert rows == [] and cols == [], (rows, cols)
-    assert r.cols("不存在") == []
 
 
 def test_latest_date():

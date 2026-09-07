@@ -7,11 +7,9 @@
 
 由根目录 backfill.py(薄 CLI) 和 manager.py(数据补全页) 共同调用。
 """
-import sqlite3
-from datetime import datetime, timedelta
-from pathlib import Path
 import time
-from collector import storage
+from datetime import datetime, timedelta
+from collector import repository, storage
 
 TIME_COL = {
     "工单明细": ("创建日期", "%Y-%m-%d %H:%M:%S"),
@@ -35,27 +33,14 @@ def iter_days(start, end):
 
 def day_row_count(source, day, data_dir):
     """该 source db 中某天的行数。无库返回 0。"""
-    p = Path(data_dir) / f"{source}.db"
-    if not p.exists():
-        return 0
-    c = sqlite3.connect(str(p))
-    try:
-        return c.execute('SELECT COUNT(*) FROM t WHERE "时间" LIKE ?', (f'{day}%',)).fetchone()[0]
-    finally:
-        c.close()
+    rows, _ = repository.fetch_rows(
+        source, data_dir, 'SELECT COUNT(*) FROM t WHERE "时间" LIKE ?', (f"{day}%",))
+    return rows[0][0] if rows else 0
 
 
 def clear_day(source, day, data_dir):
     """删除该 source db 中某天的所有行。"""
-    p = Path(data_dir) / f"{source}.db"
-    if not p.exists():
-        return
-    c = sqlite3.connect(str(p))
-    try:
-        c.execute('DELETE FROM t WHERE "时间" LIKE ?', (f'{day}%',))
-        c.commit()
-    finally:
-        c.close()
+    repository.exec_sql(source, data_dir, 'DELETE FROM t WHERE "时间" LIKE ?', (f"{day}%",))
 
 
 def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end, cutoff=None):
@@ -114,22 +99,8 @@ def build_snapshots(df, day, fcfg, groups, time_col, fmt, win_start, win_end, cu
 
 def download_day(mcfg, secrets, day, timeout=60):
     """下载某天明细 Excel，返回原始 df。token 失效时自动刷新一次后重试。"""
-    import requests
-    from collector.detail import _parse_excel, _download_content, _should_refresh_on, TokenInvalidError
-    from token_store import refresh_token
-    for attempt in range(2):
-        try:
-            content = _download_content("数据补全", mcfg, secrets, day, timeout)
-            break
-        except (TokenInvalidError, requests.HTTPError) as exc:
-            if attempt == 1 or not _should_refresh_on(exc):
-                raise
-            new_token = refresh_token()
-            if not new_token:
-                raise
-            secrets["token"] = new_token
-            continue
-    return _parse_excel(content)
+    from collector.detail import _download_with_refresh, _parse_excel
+    return _parse_excel(_download_with_refresh("数据补全", mcfg, secrets, day, timeout))
 
 
 def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=None, now=None):

@@ -7,15 +7,12 @@ SHIFT_ORDER = ("D", "D1", "Z", "Z1", "C", "B", "A1", "A4", "A2", "A3")
 ALL_SHIFTS = set(SHIFT_ORDER) | {"OFF"}
 HIGH_SHIFTS = {"D", "D1"}
 D_FAMILY = HIGH_SHIFTS
-SECONDARY_HIGH_SHIFTS = {"Z", "Z1"}
-Z_FAMILY = SECONDARY_HIGH_SHIFTS
+Z_FAMILY = {"Z", "Z1"}
 HIGH_LIMIT_SHIFTS = D_FAMILY | Z_FAMILY
 A_CLASS_SHIFTS = {"A1", "A2", "A3", "A4", "B", "C"}
 COMFORT_SHIFTS = {"A2", "A3"}
-D_BALANCE_SHIFTS = set(D_FAMILY)
-Z_BALANCE_SHIFTS = set(Z_FAMILY)
 A_BALANCE_SHIFTS = {"A1", "A4"}
-BALANCE_GROUPS = (D_BALANCE_SHIFTS, Z_BALANCE_SHIFTS, A_BALANCE_SHIFTS)
+BALANCE_GROUPS = (D_FAMILY, Z_FAMILY, A_BALANCE_SHIFTS)
 WORK_SHIFTS = set(SHIFT_ORDER)
 REST_SHIFT = "OFF"
 
@@ -38,22 +35,6 @@ def normalize_shift(value: Any) -> str:
         if shift in {"A1", "A2", "A3", "A4"} and text.startswith(shift):
             return shift
     return text
-
-
-def is_rest(value: Any) -> bool:
-    return normalize_shift(value) == REST_SHIFT
-
-
-def is_work(value: Any) -> bool:
-    return normalize_shift(value) in WORK_SHIFTS
-
-
-def is_high_limited(value: Any) -> bool:
-    return normalize_shift(value) in HIGH_LIMIT_SHIFTS
-
-
-def is_a_class(value: Any) -> bool:
-    return normalize_shift(value) in A_CLASS_SHIFTS
 
 
 def date_label(value: Any) -> str:

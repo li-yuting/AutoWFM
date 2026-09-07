@@ -27,7 +27,6 @@ def make_schedule(rows, history_days=0, lock_values=True):
                 original_value=v,
                 is_locked=(v is not None and lock_values),
                 is_historical=idx < history_days,
-                row=i + 2,
                 column=5 + idx,
             )
             for idx, v in enumerate(values)
@@ -35,7 +34,7 @@ def make_schedule(rows, history_days=0, lock_values=True):
         employees.append(
             Employee(name=name, group=group, coefficient=coeff,
                      is_phase3="三期" in ptype, schedule=cells,
-                     row_index=i + 2, person_type=ptype)
+                     row_index=i + 2)
         )
     dates = list(range(n_days))
     demands = [DailyDemand(date=d, demand={s: 0.0 for s in SHIFT_ORDER + ("OFF",)})

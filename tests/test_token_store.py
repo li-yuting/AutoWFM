@@ -57,7 +57,7 @@ def main():
         update_env_token("NEWTOK123", env_path)
         with open(env_path, "r", encoding="utf-8") as f:
             content = f.read()
-        assert "AUTOWFM_TOKEN=NEWTOK123" in content
+        assert "AUTOWFM_TOKEN='NEWTOK123'" in content
         assert "A=1" in content and "B=2" in content
         assert "AUTOWFM_TOKEN=old" not in content
 
@@ -66,7 +66,7 @@ def main():
         update_env_token("NEWTOK123", env_path)
         with open(env_path, "r", encoding="utf-8") as f:
             content = f.read()
-        assert "AUTOWFM_TOKEN=NEWTOK123" in content
+        assert "AUTOWFM_TOKEN='NEWTOK123'" in content
         assert "A=1" in content
     finally:
         os.remove(env_path)

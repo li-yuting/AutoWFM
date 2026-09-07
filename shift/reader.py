@@ -10,13 +10,14 @@ from utils import SHIFT_ORDER, clean_text, number
 DEMAND_SHEET = "需求"
 SCHEDULE_SHEET = "班表"
 META_COLUMNS = 4
+HISTORY_DAYS = 6
 
 
-def read_schedule(path: str | Path, history_days: int = 6) -> Schedule:
+def read_schedule(path: str | Path) -> Schedule:
     workbook_path = str(Path(path))
     wb = load_workbook(workbook_path, data_only=False)
-    demand_ws = wb[DEMAND_SHEET] if DEMAND_SHEET in wb.sheetnames else wb.worksheets[0]
-    schedule_ws = wb[SCHEDULE_SHEET] if SCHEDULE_SHEET in wb.sheetnames else wb.worksheets[1]
+    demand_ws = wb[DEMAND_SHEET]
+    schedule_ws = wb[SCHEDULE_SHEET]
 
     schedule_dates = [
         schedule_ws.cell(1, col).value
@@ -42,8 +43,7 @@ def read_schedule(path: str | Path, history_days: int = 6) -> Schedule:
                     value=value,
                     original_value=value,
                     is_locked=locked,
-                    is_historical=idx < history_days,
-                    row=row,
+                    is_historical=idx < HISTORY_DAYS,
                     column=col,
                 )
             )
@@ -55,7 +55,6 @@ def read_schedule(path: str | Path, history_days: int = 6) -> Schedule:
                 is_phase3="三期" in person_type,
                 schedule=cells,
                 row_index=row,
-                person_type=person_type,
             )
         )
 
@@ -64,9 +63,8 @@ def read_schedule(path: str | Path, history_days: int = 6) -> Schedule:
         dates=schedule_dates,
         demands=demands,
         workbook_path=workbook_path,
-        history_days=history_days,
+        history_days=HISTORY_DAYS,
         schedule_sheet_name=schedule_ws.title,
-        demand_sheet_name=demand_ws.title,
         date_columns=date_columns,
     )
 

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 
 class ConfigError(Exception):
@@ -21,21 +22,12 @@ DEFAULT_LIMIT = 3
 DEFAULT_HEADLESS = True
 
 
-def _load_env() -> None:
-    """加载 .env 到 os.environ（load_dotenv 默认不覆盖已设变量）。"""
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass
-
-
 def load(config_path: str | Path = "config.yaml") -> dict:
     """读取并校验 member_limit 配置，返回：
     {"url": str, "account": str, "password": str,
      "limit": int, "members": list[str], "headless": bool}
     """
-    _load_env()
+    load_dotenv()
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
     section = cfg.get("member_limit") or {}

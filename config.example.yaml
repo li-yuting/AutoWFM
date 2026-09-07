@@ -11,7 +11,7 @@
 #   - notify.screenshot_url             : 看板截图 URL
 #   - notify.alert.gap_recipient        : 采集缺口告警 @ 人（手机号）
 #   - notify.alert.recipients.*         : 各线路告警 @ 人（手机号）
-#   - forecast.alert_recipient          : 预测差异告警 @ 人（手机号）
+#   - forecast.auto_tableau_dir              : AutoTableau 下载目录
 #   - subs[*].data.agentStatusDeptId    : 部门密钥 ID
 #   - detail_modes[*].url               : 明细导出 API 地址
 #   - detail_modes[*].data.exports      : 导出列名（逗号分隔）
@@ -41,7 +41,6 @@ secrets:
   tenementId: ""         # AUTOWFM_TENEMENT_ID
 storage:
   dir: "data"
-  backend: "sqlite"   # 存储后端:sqlite(默认) | postgresql(将来);Repository 模式按此切换实现
 logging:
   path: "logs/autowfm.log"
 
@@ -65,10 +64,8 @@ notify:
       "12378": ["", "", ""]
 
 forecast:
-  diff_threshold: 0.10          # 相对差异阈值(|forecast-csv|/csv)，超过则告警
-  alert_recipient: [""]
-  holidays_file: "holidays.txt" # 项目根
-  output_dir: "output"
+  # 仅机器相关的 AutoTableau 下载目录可配；其余模型参数为代码常量(peakflow/config.py)
+  auto_tableau_dir: ""   # AutoTableau 安装目录（机器相关）
 
 seat_data: &seat_data
   skillCode: ""

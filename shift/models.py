@@ -12,7 +12,6 @@ class ShiftCell:
     original_value: Any = None
     is_locked: bool = False
     is_historical: bool = False
-    row: int = 0
     column: int = 0
 
     @property
@@ -36,7 +35,6 @@ class Employee:
     is_phase3: bool
     schedule: list[ShiftCell]
     row_index: int
-    person_type: str = ""
 
     @property
     def is_newbie(self) -> bool:
@@ -48,14 +46,10 @@ class DailyDemand:
     date: Any
     demand: dict[str, float]
 
-    def get(self, shift: str) -> float:
-        return self.demand.get(shift, 0.0)
-
 
 @dataclass
 class AdjustedDemand:
     date: Any
-    original: dict[str, float]
     adjusted: dict[str, float]
     off_to_a3: float = 0.0
     a3_to_off: float = 0.0
@@ -81,7 +75,6 @@ class Schedule:
     workbook_path: str
     history_days: int = 6
     schedule_sheet_name: str = "班表"
-    demand_sheet_name: str = "需求"
     date_columns: list[int] = field(default_factory=list)
     warnings: list[Warning] = field(default_factory=list)
     adjusted_demands: list[AdjustedDemand] = field(default_factory=list)
@@ -93,6 +86,3 @@ class Schedule:
     @property
     def active_indexes(self) -> range:
         return range(self.work_start_index, len(self.dates))
-
-    def cell(self, employee: Employee, day_index: int) -> ShiftCell:
-        return employee.schedule[day_index]

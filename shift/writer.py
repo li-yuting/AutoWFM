@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from copy import copy
 from pathlib import Path
 
@@ -8,17 +7,17 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from models import Schedule
+from scheduler import _group_streaks, _rest_blocks
 from utils import (
     A_BALANCE_SHIFTS,
-    D_BALANCE_SHIFTS,
     D_FAMILY,
     REST_SHIFT,
     SHIFT_ORDER,
     WORK_SHIFTS,
-    Z_BALANCE_SHIFTS,
     Z_FAMILY,
     date_label,
 )
+from validators import _actual_by_shift
 
 
 def write_schedule(schedule: Schedule, output_path: str | Path) -> None:
@@ -84,41 +83,11 @@ def _streak_shifts(check_id: str) -> set[str]:
     return WORK_SHIFTS
 
 
-def _streaks(employee, shifts: set[str]) -> list[tuple[int, int]]:
-    result = []
-    start = None
-    for idx, cell in enumerate(employee.schedule):
-        if cell.base_shift in shifts:
-            if start is None:
-                start = idx
-        elif start is not None:
-            result.append((start, idx - 1))
-            start = None
-    if start is not None:
-        result.append((start, len(employee.schedule) - 1))
-    return result
-
-
 def _containing_streak(employee, idx: int, shifts: set[str]) -> tuple[int, int]:
-    for start, end in _streaks(employee, shifts):
+    for start, end, _ in _group_streaks(employee, shifts):
         if start <= idx <= end:
             return start, end
     return idx, idx
-
-
-def _rest_blocks(employee) -> list[tuple[int, int]]:
-    blocks = []
-    start = None
-    for idx, cell in enumerate(employee.schedule):
-        if cell.base_shift == REST_SHIFT:
-            if start is None:
-                start = idx
-        elif start is not None:
-            blocks.append((start, idx - 1))
-            start = None
-    if start is not None:
-        blocks.append((start, len(employee.schedule) - 1))
-    return blocks
 
 
 def _rest_gap_range(employee, idx: int) -> tuple[int, int]:
@@ -135,26 +104,22 @@ def _write_stats(ws, schedule: Schedule) -> None:
     ws.sheet_view.showGridLines = False
     header_fill = PatternFill("solid", fgColor="1F4E78")
     header_font = Font(color="FFFFFF", bold=True, name="Microsoft YaHei")
-    normal_font = Font(name="Microsoft YaHei")
 
-    row = 1
-    row = _section(ws, row, "每日满足情况", header_fill, header_font)
+    _section(ws, "每日满足情况", header_fill, header_font)
     ws.append(["日期", "班次", "需求", "实际", "差异"])
-    _style_header(ws[row])
-    row += 1
+    _style_header(ws[ws.max_row])
     for day_index, demand in enumerate(schedule.adjusted_demands or []):
         actual = _actual_by_shift(schedule, day_index)
         for shift in SHIFT_ORDER + ("OFF",):
             target = demand.get(shift)
             value = actual.get(shift, 0.0)
             ws.append([date_label(schedule.dates[day_index]), shift, round(target, 2), round(value, 2), round(value - target, 2)])
-            row += 1
 
-    row += 2
-    row = _section(ws, row, "员工统计", header_fill, header_font)
+    ws.append([])
+    ws.append([])
+    _section(ws, "员工统计", header_fill, header_font)
     ws.append(["姓名", "班组", "D/D1 均衡", "Z/Z1 均衡", "A1/A4 均衡", "休息天数", "连续双休次数"])
-    _style_header(ws[row])
-    row += 1
+    _style_header(ws[ws.max_row])
     for employee in schedule.employees:
         d_count = 0
         z_count = 0
@@ -164,9 +129,9 @@ def _write_stats(ws, schedule: Schedule) -> None:
         prev_rest = False
         for idx in schedule.active_indexes:
             base = employee.schedule[idx].base_shift
-            if base in D_BALANCE_SHIFTS:
+            if base in D_FAMILY:
                 d_count += 1
-            if base in Z_BALANCE_SHIFTS:
+            if base in Z_FAMILY:
                 z_count += 1
             if base in A_BALANCE_SHIFTS:
                 a_count += 1
@@ -177,26 +142,23 @@ def _write_stats(ws, schedule: Schedule) -> None:
                 double_rests += 1
             prev_rest = is_rest
         ws.append([employee.name, employee.group, d_count, z_count, a_count, rest_days, double_rests])
-        row += 1
 
-    row += 2
-    row = _section(ws, row, "OFF/A3 调整", header_fill, header_font)
+    ws.append([])
+    ws.append([])
+    _section(ws, "OFF/A3 调整", header_fill, header_font)
     ws.append(["日期", "OFF转A3", "A3转OFF"])
-    _style_header(ws[row])
-    row += 1
+    _style_header(ws[ws.max_row])
     for demand in schedule.adjusted_demands:
         if demand.off_to_a3 or demand.a3_to_off:
             ws.append([date_label(demand.date), round(demand.off_to_a3, 2), round(demand.a3_to_off, 2)])
-            row += 1
 
-    row += 2
-    row = _section(ws, row, "警告信息", header_fill, header_font)
+    ws.append([])
+    ws.append([])
+    _section(ws, "警告信息", header_fill, header_font)
     ws.append(["编号", "级别", "员工", "日期", "描述"])
-    _style_header(ws[row])
-    row += 1
+    _style_header(ws[ws.max_row])
     for warning in schedule.warnings:
         ws.append([warning.check_id, warning.severity, warning.employee, date_label(warning.date), warning.message])
-        row += 1
 
     for col in range(1, ws.max_column + 1):
         ws.column_dimensions[ws.cell(1, col).column_letter].width = 18
@@ -206,25 +168,13 @@ def _write_stats(ws, schedule: Schedule) -> None:
                 font = copy(cell.font)
                 font.name = "Microsoft YaHei"
                 cell.font = font
-            else:
-                cell.font = normal_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
 
-def _actual_by_shift(schedule: Schedule, day_index: int) -> dict[str, float]:
-    totals = defaultdict(float)
-    for employee in schedule.employees:
-        base = employee.schedule[day_index].base_shift
-        if base:
-            totals[base] += employee.coefficient
-    return dict(totals)
-
-
-def _section(ws, row: int, title: str, fill, font) -> int:
-    ws.cell(row, 1).value = title
-    ws.cell(row, 1).fill = fill
-    ws.cell(row, 1).font = font
-    return row + 1
+def _section(ws, title: str, fill, font) -> None:
+    ws.append([title])
+    ws.cell(ws.max_row, 1).fill = fill
+    ws.cell(ws.max_row, 1).font = font
 
 
 def _style_header(cells) -> None:

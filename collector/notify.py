@@ -1,8 +1,9 @@
 """企微 webhook 推送(定时 markdown 报表 + 排队告警)+ Playwright 截图。"""
-import base64, csv, datetime, hashlib, logging, sqlite3
+import base64, csv, datetime, hashlib, logging
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import requests
+from collector import repository
 from collector._utils import in_window
 
 log = logging.getLogger("autowfm")
@@ -18,44 +19,18 @@ def _pct(num, den):
     return f"{num / den * 100:.2f}%" if den else "0.00%"
 
 
-def latest_snapshot(data_dir, source, date_str):
-    """当天该源 时间 最大的一行(dict);无表/无数据返回 None。"""
-    path = Path(data_dir) / f"{source}.db"
-    if not path.exists():
-        return None
-    con = sqlite3.connect(str(path))
-    try:
-        cols = [r[1] for r in con.execute("PRAGMA table_info(t)").fetchall()]
-        if not cols:
-            return None
-        row = con.execute(
-            f'SELECT {",".join(chr(34) + c + chr(34) for c in cols)} FROM t '
-            f'WHERE "时间" LIKE ? ORDER BY "时间" DESC LIMIT 1',
-            (f"{date_str}%",),
-        ).fetchone()
-    finally:
-        con.close()
-    return dict(zip(cols, row)) if row else None
-
-
 def latest_two(data_dir, source, date_str):
     """当天该源 时间 倒序前两条(dict);无表/无数据返回 []。供转人工量停滞检测对比。"""
-    path = Path(data_dir) / f"{source}.db"
-    if not path.exists():
-        return []
-    con = sqlite3.connect(str(path))
-    try:
-        cols = [r[1] for r in con.execute("PRAGMA table_info(t)").fetchall()]
-        if not cols:
-            return []
-        rows = con.execute(
-            f'SELECT {",".join(chr(34) + c + chr(34) for c in cols)} FROM t '
-            f'WHERE "时间" LIKE ? ORDER BY "时间" DESC LIMIT 2',
-            (f"{date_str}%",),
-        ).fetchall()
-    finally:
-        con.close()
-    return [dict(zip(cols, row)) for row in rows]
+    rows, cols = repository.fetch_rows(
+        source, data_dir,
+        'SELECT * FROM t WHERE "时间" LIKE ? ORDER BY "时间" DESC LIMIT 2', (f"{date_str}%",))
+    return [dict(zip(cols, row)) for row in (rows or [])]
+
+
+def latest_snapshot(data_dir, source, date_str):
+    """当天该源 时间 最大的一行(dict);无表/无数据返回 None。"""
+    two = latest_two(data_dir, source, date_str)
+    return two[0] if two else None
 
 
 def forecast_at(data_dir, line, now_str):
