@@ -82,11 +82,16 @@ def test_tick_no_duplicate_auto_start():
     task = _make_task()
     with patch("manager.subprocess.Popen", return_value=_running_proc()) as popen:
         task.tick(True, dt.datetime(2026, 8, 1, 9, 30, tzinfo=SH))
+        spawned = popen.call_count   # Windows: 探测+拉起=2;Linux: 仅拉起=1;只看增量
         events = task.tick(True, dt.datetime(2026, 8, 1, 10, 0, tzinfo=SH))
-        popen.assert_called_once()
+        assert popen.call_count == spawned, "第二拍不应再有任何拉起/探测"
     assert task.is_running()
     assert len(events) == 0, "运行中不应重复拉起"
     print("tick_no_duplicate_auto_start OK")
+
+# 注:不要用 popen.assert_called_once()——Windows 上 subprocess.run 内部也调用模块级
+# Popen,_find_external_pid 的探测会计入 mock,单次 start 即 2 次调用;Linux CI 只有 1 次。
+# 快照对比增量才跨平台一致(Global Constraint:不引入平台差异)。
 
 
 def test_tick_auto_start_requires_checkbox():
