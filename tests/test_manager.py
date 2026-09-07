@@ -240,6 +240,30 @@ def test_update_status_sets_dot():
     print("update_status_sets_dot OK")
 
 
+def test_update_status_states():
+    """四态显示:已暂停重启(熔断)与未运行都不再出现旧「已停止」分支。"""
+    with patch.object(ManagerUI, "_build_tray", lambda self: None), \
+         patch.object(ManagerUI, "_refresh", lambda self: None):
+        root = tk.Tk()
+        root.withdraw()
+        ui = ManagerUI(root, _cfg())
+        try:
+            task = ui.tasks[0]
+            # 熔断:restart_failures >= MAX_FAILURES -> 已暂停重启(红)
+            task.restart_failures = 3
+            ui._update_status()
+            assert ui._vars[0]["status"].get() == "已暂停重启"
+            assert ui._vars[0]["status_dot"].cget("fg") == "#aa2222"
+            # 未熔断且无进程 -> 未运行(红)
+            task.restart_failures = 0
+            ui._update_status()
+            assert ui._vars[0]["status"].get() == "未运行"
+            assert ui._vars[0]["status_dot"].cget("fg") == "#aa2222"
+        finally:
+            root.destroy()
+    print("update_status_states OK")
+
+
 def test_member_limit_schedule_rearm():
     """预约触发后(fired=True)重新勾选启用,应重置 fired 允许第二次预约;
     已勾选但时间未填(idle)不应被静默取消勾选。"""
@@ -478,6 +502,7 @@ def main():
     test_tick_health_check_clears_failures()
     test_ui_constructs()
     test_update_status_sets_dot()
+    test_update_status_states()
     test_member_limit_schedule_rearm()
     test_tick_auto_start_requires_checkbox()
     test_auto_start_state_roundtrip()

@@ -43,7 +43,8 @@
    b. self.process 已退出      → 清句柄；uptime <30s → failures++，≥30s → failures 归零；
         failures ≥ MAX_FAILURES(3) → 弹一次置顶告警（popup_shown 当日去重），本拍不拉起；
         否则 start(automatic=True)；start 返回 False（启动异常）→ failures++
-   c. external_pid 存在        → tasklist 探活；已死 → 清掉 external_pid，走 b 的计数逻辑重新拉起
+   c. external_pid 存在        → tasklist 探活；已死 → 清掉 external_pid，下一拍由 d 统一拉起
+                                 （不计数：外部进程无 started_at，uptime 计数不适用）
    d. 没有任何进程             → 未熔断就 start()（启动失败 failures++）；已熔断 → 弹一次告警（去重），保持暂停
 ```
 
@@ -60,7 +61,7 @@
 |---|---|
 | `ManagedTask.__init__` | 删除 `user_stopped`、`auto_started_today`、`auto_stopped_today` 字段 |
 | `stop()` | 删除 `automatic` 参数（唯一用途是设 `user_stopped`）；所有调用点统一 `stop()` |
-| `start()` | 删除 3 处 `user_stopped = False` 赋值；外部进程接管、Popen 拉起逻辑不变 |
+| `start()` | 删除 2 处 `user_stopped = False` 赋值；外部进程接管、Popen 拉起逻辑不变 |
 | `restart()` | 删除 `user_stopped = False` 行；其余不变（清零计数 → start） |
 | `_toggle_auto_start()` | 新增：重新勾上时复位 `restart_failures` / `popup_shown`（取消再勾 = 明确意图，解除熔断暂停） |
 | `_update_status()` | 删除「已停止」分支；剩 4 态：运行中 / 运行中(外部) / 已暂停重启 / 未运行 |
