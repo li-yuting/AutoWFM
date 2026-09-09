@@ -1,9 +1,54 @@
 from __future__ import annotations
 
+import functools
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from peakflow import config
+
+# 国家法定节假日：休息类（休假/三薪）→ 周日档（一周最低）；补班（上班）→ 周一档
+_REST_DAYS = {"法定休假", "法定三薪"}
+_MAKEUP_DAYS = {"法定补班"}
+
+
+@functools.lru_cache(maxsize=1)
+def _holiday_map() -> dict:
+    """data/节假日.csv → {date: 类型}。文件缺失或解析失败返回 {}（行为与无日历一致）。"""
+    path = Path(config.HOLIDAY_FILE)
+    if not path.is_file():
+        return {}
+    mapping = {}
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig", dtype=str)
+        for _, r in df.iterrows():
+            try:
+                d = pd.Timestamp(r["日期"]).date()
+            except (KeyError, TypeError, ValueError):
+                continue
+            t = str(r["类型"]).strip()
+            if t in _REST_DAYS or t in _MAKEUP_DAYS:
+                mapping[d] = t
+    except Exception:
+        print(f"警告: 节假日文件解析失败，本次忽略: {path}")
+        return {}
+    return mapping
+
+
+def holiday_type(d) -> str:
+    """该日期在节假日.csv 中的类型（法定休假/法定三薪/法定补班）；无则 ''。"""
+    return _holiday_map().get(pd.Timestamp(d).date(), "")
+
+
+def _day_band(sidx: pd.Series, d) -> float:
+    """未来日期的星期档位：默认自身星期档；法定休息日→周日档，法定补班→周一档。"""
+    t = _holiday_map().get(pd.Timestamp(d).date())
+    if t in _REST_DAYS:
+        return float(sidx.get(6, 0.0))
+    if t in _MAKEUP_DAYS:
+        return float(sidx.get(0, 0.0))
+    return float(sidx.get(d.weekday(), 0.0))
 
 
 def _trend_tail(series: pd.Series) -> pd.Series:
@@ -95,7 +140,7 @@ def forecast_ratio(series: pd.Series, future_dates: list,
     out = np.empty(len(future_dates))
     for i in range(len(future_dates)):
         d = future_dates[i]
-        v = tf[i] + sidx.get(d.weekday(), 0.0)
+        v = tf[i] + _day_band(sidx, d)
         if dom_idx is not None:
             v += float(dom_idx.get(d.day, 0.0))
         out[i] = v
