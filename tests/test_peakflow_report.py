@@ -62,9 +62,57 @@ def test_report_has_totals_in_detail():
     print("PASS test_report_has_totals_in_detail")
 
 
+def test_overview_notes_statutory_holidays():
+    os.makedirs(_WS_TMP, exist_ok=True)
+    import tempfile
+    from peakflow import models
+    try:
+        df, sig = _sample()
+        # 预测日期约 2026-07-06..07-15；标记首日为首个法定休假日
+        fd_dates = sorted(set(df["date"]))
+        target = fd_dates[0].date()
+        tmp_dir = os.path.join(_WS_TMP, "holiday")
+        os.makedirs(tmp_dir, exist_ok=True)
+        path = os.path.join(tmp_dir, "节假日.csv")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"日期,类型\n{target},法定三薪\n")
+        orig = config.HOLIDAY_FILE
+        config.HOLIDAY_FILE = path
+        models._holiday_map.cache_clear()
+        try:
+            out = Path(_WS_TMP) / "out_note.xlsx"
+            report.write_report(df, df, sig, {}, out)
+            wb = load_workbook(out)
+            ws = wb["总览"]
+            headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+            assert headers[-1] == "备注", f"备注应是最右列, got {headers}"
+            col_date = headers.index("日期") + 1
+            col_note = len(headers)
+            found = False
+            for r in range(2, ws.max_row + 1):
+                cv = ws.cell(row=r, column=col_date).value
+                if cv is None or "周汇总" in str(cv):
+                    continue
+                d = cv.date() if hasattr(cv, "date") else cv
+                note = ws.cell(row=r, column=col_note).value
+                if d == target:
+                    assert note == "法定三薪"
+                    found = True
+                else:
+                    assert note in ("", None), f"{cv} 不应有备注"
+            assert found, "未找到标记日期行"
+        finally:
+            config.HOLIDAY_FILE = orig
+            models._holiday_map.cache_clear()
+    finally:
+        shutil.rmtree(_WS_TMP, ignore_errors=True)
+    print("PASS test_overview_notes_statutory_holidays")
+
+
 def main():
     test_write_report()
     test_report_has_totals_in_detail()
+    test_overview_notes_statutory_holidays()
     print("\nAll tests passed!")
 
 
