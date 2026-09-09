@@ -23,6 +23,7 @@ def _auto_tableau_dir() -> str:
 
 DATA_DIR = BASE_DIR / "data"
 OUTPUT_DIR = BASE_DIR / "output"
+HOLIDAY_FILE = DATA_DIR / "节假日.csv"
 
 # 取数
 AUTO_TABLEAU_DIR = Path(_auto_tableau_dir())

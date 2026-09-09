@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from peakflow import config
+from peakflow import config, models
 from peakflow.forecast import total_by_date, weekly_summary
 
 
@@ -52,6 +52,7 @@ def _overview_frame(o_total, h_total, o_week, h_week) -> pd.DataFrame:
         for ch, suf in (("在线", "_o"), ("热线", "_h")):
             for label, o_col, _base, _k in _BANDS:
                 row[f"{ch}{label}"] = round(getattr(r, f"{o_col}{suf}"))
+        row["备注"] = models.holiday_type(r.date)
         rows.append(row)
     weekly = o_week.merge(h_week, on="week", suffixes=("_o", "_h"))
     for r in weekly.itertuples():
@@ -59,6 +60,7 @@ def _overview_frame(o_total, h_total, o_week, h_week) -> pd.DataFrame:
         for ch, suf in (("在线", "_o"), ("热线", "_h")):
             for label, _o_col, base, k in _BANDS:
                 row[f"{ch}{label}"] = round(getattr(r, f"{base}{suf}") * k)
+        row["备注"] = ""
         rows.append(row)
     return pd.DataFrame(rows)
 
