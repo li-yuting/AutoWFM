@@ -516,11 +516,11 @@ Run（读刚生成的 Excel，打印关键日期行）：
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
-.\.venv\Scripts\python.exe -c "import glob,pandas as pd,datetime as dt; f=glob.glob('output/2026-09-09/预测_*.xlsx')[-1]; df=pd.read_excel(f,sheet_name='总览'); key=['2026-09-20','2026-09-25','2026-10-01','2026-10-07','2026-09-19','2026-10-08']; print(df[(df['日期'].astype(str).isin(key))][['日期','星期','在线进线-中性','热线进线-中性','备注']].to_string(index=False))"
+.\.venv\Scripts\python.exe -c "import glob,pandas as pd,datetime as dt; f=glob.glob('output/2026-09-09/预测_*.xlsx')[-1]; df=pd.read_excel(f,sheet_name='总览'); key=['2026-09-20','2026-09-25','2026-10-01','2026-10-07','2026-09-19','2026-10-08']; mask=df['日期'].astype(str).str.slice(0,10).isin(key); print(df[mask][['日期','星期','在线进线-中性','热线进线-中性','备注']].to_string(index=False))"
 ```
 
 Expected 判读（量级相对比较，非绝对值）：
-- `2026-09-20`（周六·补班）备注=法定补班，量级**高于** `2026-09-19`（普通周六）；
+- `2026-09-20`（周日·补班）备注=法定补班，量级**高于** `2026-09-19`（普通周六）；
 - `2026-10-01`（周四·三薪）备注=法定三薪，量级**低于** `2026-10-08`（普通周四，节后第一工作日）与 9/24（普通周四）；
 - `2026-10-07`（周三·休假）备注=法定休假，量级贴近周日档；
 - `2026-09-25`（周五·三薪）备注=法定三薪，量级低于 9/18（普通周五）。

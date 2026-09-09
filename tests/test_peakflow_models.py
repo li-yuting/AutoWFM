@@ -190,13 +190,14 @@ def test_ratio_makeup_saturday_rises_toward_monday():
 
 def test_ratio_unflagged_dates_identical_with_and_without_calendar():
     r = _ratio_with_weekday_season()
-    fd = _future_dates(r, 21)  # 2026-08-24..09-13，无一落在真实/临时日历
+    fd = _future_dates(r, 21)
 
     def run():
         return models.forecast_ratio(r, fd)
 
-    base = run()  # 此刻 config.HOLIDAY_FILE 指向真实仓库文件（或缺失），fd 内无标记日
-    # 临时日历只含无关日期 → 输出与无日历完全一致
+    # 基线：空日历（仅表头）→ 空映射，与真实仓库日历文件解耦（hermetic）
+    base = _with_holiday([], run)
+    # 临时日历只含无关日期 → 输出与空日历完全一致
     out = _with_holiday([("2030-01-01", "法定休假")], run)
     assert np.allclose(base, out, atol=1e-12)
 
@@ -225,6 +226,24 @@ def test_ratio_missing_holiday_file_falls_back():
     assert np.allclose(base, out, atol=1e-12), "文件缺失应回退为现状行为"
 
 
+def test_holiday_type_mapping_and_edge_rows():
+    # 临时日历：一个三薪、一个补班、一个未知类型、一个非法日期
+    rows = [
+        ("2026-01-01", "法定三薪"),
+        ("2026-01-02", "法定补班"),
+        ("2026-01-05", "法定加班"),   # 未知类型 → 忽略（无标记）
+        ("not-a-date", "法定休假"),   # 非法日期 → 跳过，不报错
+    ]
+
+    def check():
+        assert models.holiday_type(pd.Timestamp("2026-01-01")) == "法定三薪"
+        assert models.holiday_type(pd.Timestamp("2026-01-02")) == "法定补班"
+        assert models.holiday_type(pd.Timestamp("2026-01-05")) == ""   # 未知类型 → ''
+        assert models.holiday_type(pd.Timestamp("2026-01-08")) == ""   # 未标记日期 → ''
+
+    _with_holiday(rows, check)
+
+
 def main():
     test_client_volumes_conservation()
     test_client_volumes_non_negative_and_keys()
@@ -240,6 +259,7 @@ def main():
     test_ratio_makeup_saturday_rises_toward_monday()
     test_ratio_unflagged_dates_identical_with_and_without_calendar()
     test_ratio_missing_holiday_file_falls_back()
+    test_holiday_type_mapping_and_edge_rows()
     print("test_peakflow_models OK")
 
 

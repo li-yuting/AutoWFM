@@ -54,6 +54,7 @@ reasonix.toml
 docs/git-push-github-notes.md
 .test_tmp/
 tests/.test_tmp/
+tests/.holiday_tmp/
 # ---- 接待上限批量修改 ----
 member_limit/chrome_profile/
 

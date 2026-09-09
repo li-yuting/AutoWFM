@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
-from peakflow import config, report
+from peakflow import config, report, models
 from tests.helpers import make_history
 
 # Use workspace-local temp to avoid sandbox restrictions on system temp
@@ -64,8 +64,6 @@ def test_report_has_totals_in_detail():
 
 def test_overview_notes_statutory_holidays():
     os.makedirs(_WS_TMP, exist_ok=True)
-    import tempfile
-    from peakflow import models
     try:
         df, sig = _sample()
         # 预测日期约 2026-07-06..07-15；标记首日为首个法定休假日
