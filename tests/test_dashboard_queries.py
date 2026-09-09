@@ -202,7 +202,7 @@ def test_build_day():
     assert res["outbound"]["贷后二线"]["工单量"][9] == 22     # (4-2)+(40-20)=2+20
     assert res["outbound"]["贷后二线"]["转接量"][9] == 10     # (8-4)+(12-6)=4+6
     assert res["outbound"]["二线客诉"]["工单量"][9] == 5      # 10-5
-    assert res["outbound"]["常规工单"]["工单量"][9] == 10     # 20-10
+    assert "常规工单" not in res["outbound"]                   # 架构变动后不再采集/展示常规工单
     # 卡片：仍用累计最新(全天总量/截止当前累计)
     c = res["card"]["inbound"]["total"]
     assert c["转人工量"] == 340  # 100+200+40
@@ -225,7 +225,7 @@ def test_build_day():
     assert g["12378"]["流入率"] is None  # 无预测量
     # 外呼卡片合计(累计最新@10)
     co = res["card"]["outbound"]["total"]
-    assert co["工单量"] == 108  # 34+44+10+20
+    assert co["工单量"] == 88  # 34+44+10
     assert co["转接量"] == 40   # 20+20
     assert co["签入"] == 27     # 12+15
     assert co["空闲"] == 4      # 0+4
@@ -236,7 +236,7 @@ def test_build_day():
     assert go["贷后二线"]["工单量"] == 44  # 4+40
     assert go["贷后二线"]["转接量"] == 20  # 8+12
     assert go["二线客诉"]["工单量"] == 10
-    assert go["常规工单"]["工单量"] == 20
+    assert "常规工单" not in go
     # 表格(方案D增量：8/9点=已完成整点差值，10点=0整点刚采完)
     assert res["tables"]["inbound"][0]["小时"] == 8
     row8 = next(r for r in res["tables"]["inbound"] if r["小时"] == 8)
@@ -376,9 +376,9 @@ def test_card_detail_lag():
     assert go["贷后二线"]["工单量"] == 44      # 贷后转接组+贷后回访组 = 4+40
     assert go["贷后二线"]["转接量"] == 20      # 贷后转接组+贷后回访组 = 8+12
     assert go["二线客诉"]["工单量"] == 5       # 二线客诉处理组@10:35
-    assert go["常规工单"]["工单量"] == 10      # 常规工单处理组@10:35
+    assert "常规工单" not in go
     co = res["card"]["outbound"]["total"]
-    assert co["工单量"] == 93                  # 34+44+5+10
+    assert co["工单量"] == 83                  # 34+44+5
     assert co["转接量"] == 40                  # 20+20
 
 def test_forecast_cum_up_to():

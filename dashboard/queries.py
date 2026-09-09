@@ -231,7 +231,6 @@ def build_day(date_str, data_dir="data"):
     inc_dh_gd = _inc_sum(gd_f, gd, ("贷后转接组", "贷后回访组"), h_other)
     inc_dh_hl = _inc_sum(hl_f, hl, ("贷后转接组", "贷后回访组"), h_other)
     inc_ks_gd = _inc_col_d(gd_f, gd, "二线客诉处理组", h_other)
-    inc_cg2_gd = _inc_col_d(gd_f, gd, "常规工单处理组", h_other)
     # 预测量=每时段增量：CSV 用 forecast_increment；12378 用 7 天前累计的方案D增量
     fc_rx_inc = forecast_increment(data_dir, "热线", date_str)
     fc_im_inc = forecast_increment(data_dir, "在线", date_str)
@@ -285,7 +284,6 @@ def build_day(date_str, data_dir="data"):
             "空闲": _pluck(dh_a, "空闲", h_other),
         },
         "二线客诉": {"hours": h_other, "工单量": inc_ks_gd},
-        "常规工单": {"hours": h_other, "工单量": inc_cg2_gd},
     }
 
     # --- current_hour：接听三组实际数据的最大小时 ---
@@ -343,10 +341,9 @@ def build_day(date_str, data_dir="data"):
         dh2_in = dh.get(cur).get("签入") if dh.get(cur) else 0
         dh2_free = dh.get(cur).get("空闲") if dh.get(cur) else 0
         ks_gd = _gd("二线客诉处理组") or 0
-        cg2_gd = _gd("常规工单处理组") or 0
         card_out = {
             "total": {
-                "工单量": c2_gd + dh2_gd + ks_gd + cg2_gd,
+                "工单量": c2_gd + dh2_gd + ks_gd,
                 "转接量": c2_hl + dh2_hl,
                 "签入": c2_in + dh2_in, "空闲": c2_free + dh2_free,
             },
@@ -354,7 +351,6 @@ def build_day(date_str, data_dir="data"):
                 "常规二线": {"工单量": c2_gd, "转接量": c2_hl, "签入": c2_in, "空闲": c2_free},
                 "贷后二线": {"工单量": dh2_gd, "转接量": dh2_hl, "签入": dh2_in, "空闲": dh2_free},
                 "二线客诉": {"工单量": ks_gd},
-                "常规工单": {"工单量": cg2_gd},
             },
         }
 
@@ -400,7 +396,6 @@ _OUT_FIELDS = {
     "常规二线": ["工单量", "转接量", "签入", "空闲"],
     "贷后二线": ["工单量", "转接量", "签入", "空闲"],
     "二线客诉": ["工单量"],
-    "常规工单": ["工单量"],
 }
 
 
@@ -493,7 +488,6 @@ def build_month(ym, data_dir="data"):
                    "转接量": _col_sum(hl_l, ("贷后转接组", "贷后回访组"), days),
                    "签入": _pluck(dh_a, "签入", days), "空闲": _pluck(dh_a, "空闲", days)},
         "二线客诉": {"days": days, "工单量": _pluck(gd_l, "二线客诉处理组", days)},
-        "常规工单": {"days": days, "工单量": _pluck(gd_l, "常规工单处理组", days)},
     }
 
     def _sum(d):
@@ -530,12 +524,11 @@ def build_month(ym, data_dir="data"):
     c2_gd = _sum(outbound["常规二线"]["工单量"]) or 0
     dh2_gd = _sum(outbound["贷后二线"]["工单量"]) or 0
     ks_gd = _sum(outbound["二线客诉"]["工单量"]) or 0
-    cg2_gd = _sum(outbound["常规工单"]["工单量"]) or 0
     c2_hl = _sum(outbound["常规二线"]["转接量"]) or 0
     dh2_hl = _sum(outbound["贷后二线"]["转接量"]) or 0
     card_out = {
         "total": {
-            "工单量": c2_gd + dh2_gd + ks_gd + cg2_gd,
+            "工单量": c2_gd + dh2_gd + ks_gd,
             "转接量": c2_hl + dh2_hl,
             "签入": _avg(sum2(outbound["常规二线"]["签入"], outbound["贷后二线"]["签入"])),
             "空闲": _avg(sum2(outbound["常规二线"]["空闲"], outbound["贷后二线"]["空闲"])),
@@ -546,7 +539,6 @@ def build_month(ym, data_dir="data"):
             "贷后二线": {"工单量": dh2_gd, "转接量": dh2_hl,
                        "签入": _avg(outbound["贷后二线"]["签入"]), "空闲": _avg(outbound["贷后二线"]["空闲"])},
             "二线客诉": {"工单量": ks_gd},
-            "常规工单": {"工单量": cg2_gd},
         },
     }
 
