@@ -6,14 +6,13 @@ import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-RESULT_DIR = DATA_DIR / "result"
 
 # 蜘蛛读取的预估流入量总表（每次运行后追加本次结果并按 时间+线路 去重，保留最末一条）
 TARGET_CSV = BASE_DIR.parent / "data" / "预估流入量.csv"
 
 
 def transform_forecast(xlsx_path: Path) -> None:
-    """将周度预测 Excel 转为按时间、线路展开的 CSV"""
+    """将周度预测 Excel 转为按时间、线路展开的长表，追加到预估流入量总表"""
     if not xlsx_path.exists():
         print(f"错误: 文件不存在 — {xlsx_path}")
         sys.exit(1)
@@ -23,8 +22,6 @@ def transform_forecast(xlsx_path: Path) -> None:
     except Exception as e:
         print(f"错误: 读取 Excel 失败 — {e}")
         sys.exit(1)
-
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
     all_frames = []  # 汇总各 sheet 结果，用于追加到预估流入量总表
     for sheet_name, sheet_df in sheets.items():
@@ -52,17 +49,13 @@ def transform_forecast(xlsx_path: Path) -> None:
 
         sheet_df["时间"] = sheet_df["时间"].dt.strftime("%Y-%m-%d %H:%M")
 
-        out_path = RESULT_DIR / f"{sheet_name}.csv"
-        sheet_df.to_csv(
-            out_path,
-            columns=["时间", "线路", "时段预估量", "累计预估量"],
-            index=False,
-        )
-        print(f"已生成: {out_path}  ({len(sheet_df)} 行)")
         all_frames.append(sheet_df[["时间", "线路", "时段预估量", "累计预估量"]])
+        print(f"已汇总: {sheet_name}  ({len(sheet_df)} 行)")
 
     if all_frames:
         append_to_forecast(pd.concat(all_frames, ignore_index=True))
+    else:
+        print(f"警告: {xlsx_path} 无可用 sheet，未更新预估流入量总表")
 
 
 def append_to_forecast(new_df: pd.DataFrame) -> None:
@@ -92,5 +85,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         xlsx = Path(sys.argv[1])
     else:
-        xlsx = DATA_DIR / "量级预估20260824.xlsx"
+        xlsx = DATA_DIR / "量级预估20260909.xlsx"
     transform_forecast(xlsx)

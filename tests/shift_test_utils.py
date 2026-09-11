@@ -24,7 +24,6 @@ def make_schedule(rows, history_days=0, lock_values=True):
         cells = [
             ShiftCell(
                 value=v,
-                original_value=v,
                 is_locked=(v is not None and lock_values),
                 is_historical=idx < history_days,
                 column=5 + idx,

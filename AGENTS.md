@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-- `collector/` — data collection: WebSocket scraping (`ws.py`), CRM detail export (`detail.py`: 会话记录/工单明细), forecasting, backfill, notifications, scheduler. All writes go through the Repository abstraction in `collector/repository.py` (SQLite; 无后端切换，`storage.backend` 配置键已移除).
+- `collector/` — data collection: WebSocket scraping (`ws.py`), CRM detail export (`detail.py`: 会话记录/工单明细), forecasting, backfill, notifications, scheduler. All writes go through `collector/repository.py` (SQLite; 无后端切换，`storage.backend` 配置键已移除): 模块级 `insert`/`ensure_index` 负责写入，`SQLiteReadOnlyRepository` 负责只读访问.
 - `peakflow/` - 30-day 进线量预测（趋势 + 周季节分解外推，三档区间）；Windows 计划任务 `AutoWFM_Forecast` 每天 09:30 运行，或 manager.py「进线量预测」页手动触发。输入 AutoTableau 的 UTF-16 TSV，输出 Excel + HTML 到 `output/`；与看板实时预测量（`data/预估流入量.csv`）相互独立。
 - `dashboard/` — read-only Flask viewer (:8080) over `data/*.db` and `data/预估流入量.csv`; data 直连 `dashboard/queries.py`。`api/`（FastAPI :8081）仅供第三方只读消费。
 - `api/` — FastAPI read layer (:8081), 仅供第三方只读消费；看板不再经它取数。
@@ -16,7 +16,7 @@
 
 ## Build, Test, and Development Commands
 
-Always use the `.venv` interpreter and set UTF-8 output. There is no build step. Initial setup: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` (plus `shift/requirements.txt` if touching the shift app) and `.\.venv\Scripts\python.exe -m playwright install chromium` for 抓取Token / member_limit.
+Always use the `.venv` interpreter and set UTF-8 output. There is no build step. Initial setup: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` (shift 依赖 openpyxl/flask 已在根 requirements.txt 中，无需额外安装) and `.\.venv\Scripts\python.exe -m playwright install chromium` for 抓取Token / member_limit.
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
@@ -26,7 +26,7 @@ $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\python.exe -m api.app              # API 服务 http://127.0.0.1:8081
 .\.venv\Scripts\python.exe manager.py              # 桌面管理器 (not -m)
 .\.venv\Scripts\python.exe 抓取Token.py            # 手动刷新 CRM token (--headless 无头)
-.\.venv\Scripts\python.exe tests\test_storage.py   # 单个测试
+.\.venv\Scripts\python.exe tests\test_repository.py   # 单个测试
 ```
 
 Run all tests (no pytest): `Get-ChildItem tests\test_*.py | ForEach-Object { .\.venv\Scripts\python.exe $_.FullName }`.
@@ -36,7 +36,7 @@ Use `-m` for `collector`/`dashboard`/`api` so the project root stays on `sys.pat
 ## Coding Style & Naming Conventions
 
 - Python, 4-space indentation, PEP 8. No linter or formatter is configured.
-- DB column names are Chinese; extractor keys must match `SCHEMAS` (single source of truth: `collector/repository.py`, re-exported by `collector/storage.py`) exactly, or inserts fail with `KeyError`. When adding a metric, update both the extractor and the schema entry.
+- DB column names are Chinese; extractor keys must match `SCHEMAS` (single source of truth: `collector/repository.py`) exactly, or inserts fail with `KeyError`. When adding a metric, update both the extractor and the schema entry.
 - Collector writes and dashboard reads are separate processes; `collector/notify.py` must not import `dashboard` or `collector.scheduler` at top level.
 
 ## Testing Guidelines

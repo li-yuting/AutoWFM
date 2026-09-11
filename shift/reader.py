@@ -41,7 +41,6 @@ def read_schedule(path: str | Path) -> Schedule:
             cells.append(
                 ShiftCell(
                     value=value,
-                    original_value=value,
                     is_locked=locked,
                     is_historical=idx < HISTORY_DAYS,
                     column=col,

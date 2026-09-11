@@ -31,7 +31,6 @@ output/
 
 # ---- 周度预估 Excel（含业务量级数据）----
 writeforecast/data/*.xlsx
-writeforecast/data/result/
 
 # ---- 排班计划 Excel（含员工排班，不入库）----
 shift/*.xlsx

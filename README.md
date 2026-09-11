@@ -25,8 +25,7 @@ AutoWFM/
 │   ├── scheduler.py    # APScheduler：ws_job + detail_job，按源时间窗口
 │   ├── ws.py           # 7 路 WebSocket 采集 + 指标提取
 │   ├── detail.py       # 2 路 CRM 明细导出 + Excel 解析 + 按组计数
-│   ├── repository.py   # Repository 存储抽象（SQLite 实现，SCHEMAS 单一事实源）
-│   ├── storage.py      # 兼容层：re-export repository.SCHEMAS / SQLiteRepository
+│   ├── repository.py   # 存储层（SQLite 实现，SCHEMAS 单一事实源；insert/ensure_index + 只读 Repository）
 │   ├── backfill.py     # 历史数据补全
 │   ├── notify.py       # 企微告警 + 定时报告 + 看板截图
 │   └── _utils.py       # config/.env 加载、时间工具
@@ -91,7 +90,7 @@ $env:PYTHONIOENCODING="utf-8"   # 输出中文前必须设置
 纯 `assert`，无 pytest，逐文件直接运行：
 
 ```powershell
-.\.venv\Scripts\python.exe tests\test_storage.py   # 单个测试
+.\.venv\Scripts\python.exe tests\test_repository.py   # 单个测试
 # 全部测试：
 Get-ChildItem tests\test_*.py | ForEach-Object { .\.venv\Scripts\python.exe $_.FullName }
 ```

@@ -9,7 +9,6 @@ from utils import normalize_shift
 @dataclass
 class ShiftCell:
     value: Any = None
-    original_value: Any = None
     is_locked: bool = False
     is_historical: bool = False
     column: int = 0
