@@ -5,11 +5,11 @@ r"""用 Playwright 登录 CRM 抓取最新 token，写入 token.json 并回填 .
 可选: --headless 无头模式（默认有头，便于人机配合验证码/手动登录）
 """
 import argparse
-import json
 import os
 import sys
 import time
 
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 from token_store import (
@@ -22,19 +22,20 @@ from token_store import (
 )
 
 BASE_URL = "https://callcenter-crm.weicai.com.cn"
-LOGIN_FILE = "login.json"
 STATE_FILE = "storage_state.json"
 LOGIN_TIMEOUT = 90
 
 
-def read_login(path):
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    user = data.get("username", "")
-    pw = data.get("password", "")
-    if not user or not pw:
-        raise SystemExit("login.json 缺少 username 或 password")
-    return user, pw
+def read_login(env=None):
+    """从环境变量读取 CRM 账号密码；env 参数用于测试注入。"""
+    env = os.environ if env is None else env
+    user = str(env.get("AUTOWFM_CRM_USERNAME") or "").strip()
+    password = str(env.get("AUTOWFM_CRM_PASSWORD") or "").strip()
+    if not user or not password:
+        raise SystemExit(
+            "请在 .env 配置 AUTOWFM_CRM_USERNAME 和 AUTOWFM_CRM_PASSWORD"
+        )
+    return user, password
 
 
 def _fill_first(page, selector_candidates, text):
@@ -99,12 +100,8 @@ def main():
     ap.add_argument("--headless", action="store_true")
     args = ap.parse_args()
 
-    user, password = None, None
-    if os.path.exists(LOGIN_FILE):
-        try:
-            user, password = read_login(LOGIN_FILE)
-        except Exception as exc:
-            print(f"[提示] 读取 {LOGIN_FILE} 失败: {exc}；将进入手动登录模式。")
+    load_dotenv(ENV_FILE)
+    user, password = read_login()
 
     captured = {"token": None}
 
@@ -137,14 +134,11 @@ def main():
         if captured["token"]:
             print(f"会话仍有效，抓取到 token: {mask_token(captured['token'])}")
         else:
-            if user:
-                tried = try_auto_login(page, user, password)
-                if tried:
-                    print("已尝试自动登录，等待跳转与请求...")
-                else:
-                    print("未定位到登录框，进入手动登录")
+            tried = try_auto_login(page, user, password)
+            if tried:
+                print("已尝试自动登录，等待跳转与请求...")
             else:
-                print("未找到 login.json，进入手动登录")
+                print("未定位到登录框，进入手动登录")
             print("若页面需要验证码/手动登录，请在打开的浏览器中完成（超时 90 秒）。")
             deadline = time.time() + LOGIN_TIMEOUT
             while time.time() < deadline and not captured["token"]:
