@@ -6,7 +6,7 @@ import base64, hashlib
 import datetime
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from collector import storage, notify
+from collector import repository as storage, notify
 
 # 工作区内临时目录：避免沙箱对系统 temp / mkdtemp 的写入限制（同 test_peakflow_main.py）
 _WS_TMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test_tmp")

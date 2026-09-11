@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys, os, shutil, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from collector import backfill, storage
+from collector import backfill, repository as storage
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

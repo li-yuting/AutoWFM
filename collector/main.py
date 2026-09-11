@@ -43,10 +43,10 @@ def main():
     cfg = load_cfg()
     setup_logging(cfg)
     # 启动时建索引(幂等),加速看板按日/月前缀查询
-    from collector import storage
-    for src in storage.SCHEMAS:
+    from collector import repository
+    for src in repository.SCHEMAS:
         try:
-            storage.ensure_index(src, cfg["storage"]["dir"])
+            repository.ensure_index(src, cfg["storage"]["dir"])
         except Exception:
             logging.getLogger("autowfm").exception(f"[storage] {src} 建索引失败")
     scheduler.start(cfg)

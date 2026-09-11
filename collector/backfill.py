@@ -5,11 +5,11 @@
 每 5 分钟的累计快照(值=该刻度之前创建/开始的累计) + 23:59 全天总计。dashboard
 方案D 用 first[H+1]-first[H] 即得 H 小时新建量。
 
-由根目录 backfill.py(薄 CLI) 和 manager.py(数据补全页) 共同调用。
+由 manager.py(数据补全页) 调用。
 """
 import time
 from datetime import datetime, timedelta
-from collector import repository, storage
+from collector import repository
 
 TIME_COL = {
     "工单明细": ("创建日期", "%Y-%m-%d %H:%M:%S"),
@@ -136,7 +136,7 @@ def backfill_source(source, cfg, days, data_dir, overwrite=True, progress_cb=Non
                                       cutoff=(now.strftime("%H:%M") if day == today_str else None))
         clear_day(source, day, data_dir)
         for vals in rows:
-            storage.insert(source, vals, data_dir)
+            repository.insert(source, vals, data_dir)
         progress_cb(f"{source} {day}: 写入 {len(rows)} 行 | "
                     + " ".join(f"{g}={total[g]}" for g in groups))
         ok += 1

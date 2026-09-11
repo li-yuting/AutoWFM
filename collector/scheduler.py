@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 import logging
 from collector import ws as ws_mod
 from collector import detail as detail_mod
-from collector import storage
+from collector import repository
 from collector import notify
 from collector._utils import parse_hhmm, in_window
 
@@ -72,7 +72,7 @@ def ws_job(cfg, pool):
             if val is None:
                 failed.append(s)
                 continue
-            storage.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
+            repository.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
             ok.append(s["name"])
             _track_gap(s["name"], True, cfg)
         except Exception:
@@ -88,7 +88,7 @@ def ws_job(cfg, pool):
                 val = ws_mod.collect_one(s, cfg)
                 if val is None:
                     raise ValueError("无数据")
-                storage.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
+                repository.insert(s["name"], {"时间": now_str, **val}, cfg["storage"]["dir"])
                 ok.append(s["name"])
                 _track_gap(s["name"], True, cfg)
                 log.info(f"[WS] {s['name']} 补采成功")
@@ -117,7 +117,7 @@ def detail_job(cfg, pool):
         n = futs[f]
         try:
             counts = f.result()
-            storage.insert(n, {"时间": now_str, **counts}, cfg["storage"]["dir"])
+            repository.insert(n, {"时间": now_str, **counts}, cfg["storage"]["dir"])
             ok.append(n)
         except detail_mod.EmptyDownloadError as e:
             fail_names.append(f"{n}(空表)")

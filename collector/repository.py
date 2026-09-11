@@ -1,15 +1,14 @@
 """存储层：SQLite 实现。每个源一个独立库，每库一张表 t。
 
-SCHEMAS 是单一事实源（storage.py 从这里 re-export）。
-fetch_rows/exec_sql 是共享的「开库-建列-查询-关库」助手，供 repository/
-notify/backfill 复用，避免各处手写 PRAGMA+SELECT。
+SCHEMAS 是单一事实源。insert/ensure_index/fetch_rows/exec_sql 是模块级
+「开库-建列-执行-关库」助手，供 collector/backfill/notify 复用；
+只读聚合访问走 SQLiteReadOnlyRepository。
 """
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
 
-# SCHEMAS 与原 storage.py 保持一致(单一事实源,storage.py 从这里 re-export)
 SCHEMAS = {
     "热线":   ["时间","转人工量","接通量","排队量","累计呼入量","外呼量","外呼接通量"],
     "12378":  ["时间","转人工量","接通量","排队量","累计呼入量"],
@@ -59,39 +58,30 @@ def exec_sql(source: str, data_dir: str, sql: str, params=()) -> None:
         con.close()
 
 
-class SQLiteRepository:
-    """SQLite 写入实现:每源一库,每库一张表 t,每次开/关连接(原 storage.py 语义)。"""
+def insert(source: str, values: dict, data_dir: str) -> None:
+    """插入一行到指定源的 t 表(库/表不存在则建)。每次开/关连接:
+    9 路各写各的库,无跨线程共享,简单且无锁竞争。"""
+    conn = sqlite3.connect(str(Path(data_dir) / f"{source}.db"))
+    try:
+        conn.execute(_table_ddl(source))
+        cols = SCHEMAS[source]
+        quoted = ",".join('"' + c + '"' for c in cols)
+        ph = ",".join("?" * len(cols))
+        conn.execute(f'INSERT INTO t ({quoted}) VALUES ({ph})', [values[c] for c in cols])
+        conn.commit()
+    finally:
+        conn.close()
 
-    def __init__(self, data_dir: str = "data"):
-        self.data_dir = data_dir
 
-    def insert(self, source: str, values: dict, data_dir: str | None = None) -> None:
-        path = Path(data_dir or self.data_dir) / f"{source}.db"
-        # ponytail: 每次开/关连接 - 9 路各写各的库,无跨线程共享,简单且无锁竞争
-        conn = sqlite3.connect(str(path))
-        try:
-            conn.execute(_table_ddl(source))
-            cols = SCHEMAS[source]
-            quoted = ",".join('"' + c + '"' for c in cols)
-            ph = ",".join("?" * len(cols))
-            conn.execute(f'INSERT INTO t ({quoted}) VALUES ({ph})', [values[c] for c in cols])
-            conn.commit()
-        finally:
-            conn.close()
-
-    def ensure_index(self, source: str, data_dir: str | None = None) -> None:
-        """为某源建「时间」列索引,加速看板按日/月前缀查询。启动时调用一次,幂等。"""
-        path = Path(data_dir or self.data_dir) / f"{source}.db"
-        conn = sqlite3.connect(str(path))
-        try:
-            conn.execute(_table_ddl(source))
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_t_time ON t("时间")')
-            conn.commit()
-        finally:
-            conn.close()
-
-    def schemas(self) -> dict:
-        return SCHEMAS
+def ensure_index(source: str, data_dir: str) -> None:
+    """为某源建「时间」列索引,加速看板按日/月前缀查询。启动时调用一次,幂等。"""
+    conn = sqlite3.connect(str(Path(data_dir) / f"{source}.db"))
+    try:
+        conn.execute(_table_ddl(source))
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_t_time ON t("时间")')
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class SQLiteReadOnlyRepository:
@@ -118,15 +108,3 @@ class SQLiteReadOnlyRepository:
             if rows and rows[0] and rows[0][0] and rows[0][0] > best:
                 best = rows[0][0]
         return best or _date.today().strftime("%Y-%m-%d")
-
-
-# ---- 模块级兼容函数（原 storage.py 签名,调用点不变）----
-
-def insert(source, values, data_dir):
-    """插入一行到指定源的 t 表。"""
-    SQLiteRepository(data_dir).insert(source, values, data_dir)
-
-
-def ensure_index(source, data_dir):
-    """为某源建「时间」列索引,幂等。"""
-    SQLiteRepository(data_dir).ensure_index(source, data_dir)

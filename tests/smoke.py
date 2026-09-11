@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collector import main as M
 from collector import ws as W
 from collector import detail as D
-from collector import storage
+from collector import repository as storage
 
 def main():
     cfg = M.load_cfg(); M.setup_logging(cfg)

@@ -11,13 +11,10 @@ from pathlib import Path
 
 from collector.repository import SQLiteReadOnlyRepository
 
-def _repo_for(data_dir):
-    """为指定 data_dir 创建只读 Repository(每次调用新建,无状态)。"""
-    return SQLiteReadOnlyRepository(data_dir)
-
 def _rows_in(data_dir, source, prefix):
-    """某天(prefix=YYYY-MM-DD)或某月(prefix=YYYY-MM)该源所有行(升序)+列名。无表/无数据返回 ([], [])。"""
-    return _repo_for(data_dir).rows_in(source, prefix)
+    """某天(prefix=YYYY-MM-DD)或某月(prefix=YYYY-MM)该源所有行(升序)+列名。
+    无表/无数据返回 ([], [])。只读 Repository 每次新建,无状态。"""
+    return SQLiteReadOnlyRepository(data_dir).rows_in(source, prefix)
 
 
 def _pick(rows, cols, keyfn, keep="last"):
@@ -77,7 +74,7 @@ def latest_data_date(data_dir="data"):
     """热线/在线 db 中最新的日期(YYYY-MM-DD)。委托给 SQLiteReadOnlyRepository.latest_date。
     这两组窗口 9:00 起，故当天 9 点前取到的是昨天(最近有数据日)，9 点后取今天。
     任一库无数据则回落到今天。"""
-    return _repo_for(data_dir).latest_date()
+    return SQLiteReadOnlyRepository(data_dir).latest_date()
 
 def _forecast_rows(data_dir, line, date_str):
     path = Path(data_dir) / "预估流入量.csv"
