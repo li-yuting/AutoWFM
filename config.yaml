@@ -22,6 +22,10 @@ storage:
   dir: "data"
 logging:
   path: "logs/autowfm.log"
+maintenance:
+  keep_days: 30                 # logs 轮转归档 & output 按日目录保留天数（超过即列为可清理）
+  manager_log_backup_count: 14  # manager.log 按天轮转后保留份数
+  child_log_max_mb: 5           # 看板/API 等子进程 stdout 日志超过此大小则在下次启动时轮转
 
 notify:
   screenshot_url: "http://127.0.0.1:8080/"   # 改8080后换这里;用 127.0.0.1 避免 localhost IPv6 回退延迟

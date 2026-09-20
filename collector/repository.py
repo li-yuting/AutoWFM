@@ -6,6 +6,7 @@ SCHEMAS 是单一事实源。insert/ensure_index/fetch_rows/exec_sql 是模块�
 """
 from __future__ import annotations
 
+import csv
 import sqlite3
 from pathlib import Path
 
@@ -58,6 +59,51 @@ def exec_sql(source: str, data_dir: str, sql: str, params=()) -> None:
         con.close()
 
 
+def list_sources(data_dir: str) -> list[str]:
+    """data_dir 下所有源库名(不含 .db 后缀),按名称排序。"""
+    return sorted(p.stem for p in Path(data_dir).glob("*.db"))
+
+
+def export_csv(data_dir: str, out_dir: str | Path, start: str = "", end: str = "",
+               sources: list[str] | None = None, progress_cb=None) -> list[dict]:
+    """把指定源库(默认 data_dir 下全部)的 t 表导出为 CSV(每库一个文件,
+    utf-8-sig 供 Excel 直接打开)。
+
+    sources 为源名列表(None=全部);start/end 为 YYYY-MM-DD,按「时间」前缀过滤,
+    留空或只填一侧则全量。列名从 PRAGMA 读,不依赖 SCHEMAS(新增源自动纳入)。
+    空库(无表)跳过。返回 [{"源","行数","文件"}]。
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    summary: list[dict] = []
+    for source in (list_sources(data_dir) if sources is None else sources):
+        path = Path(data_dir) / f"{source}.db"
+        if not path.exists():
+            continue
+        sql = 'SELECT * FROM t'
+        params: tuple = ()
+        if start and end:
+            sql += ' WHERE substr("时间",1,10) BETWEEN ? AND ?'
+            params = (start, end)
+        con = sqlite3.connect(str(path))
+        try:
+            cols = [r[1] for r in con.execute("PRAGMA table_info(t)").fetchall()]
+            if not cols:
+                continue  # 还没建表的空库
+            rows = con.execute(sql + ' ORDER BY "时间"', params).fetchall()
+        finally:
+            con.close()
+        dest = out / f"{source}.csv"
+        with open(dest, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(cols)
+            writer.writerows(rows)
+        summary.append({"源": source, "行数": len(rows), "文件": str(dest)})
+        if progress_cb:
+            progress_cb(f"{source:<8} {len(rows):>6} 行  ->  {dest.name}")
+    return summary
+
+
 def insert(source: str, values: dict, data_dir: str) -> None:
     """插入一行到指定源的 t 表(库/表不存在则建)。每次开/关连接:
     9 路各写各的库,无跨线程共享,简单且无锁竞争。"""
@@ -97,6 +143,18 @@ class SQLiteReadOnlyRepository:
         rows, cols = fetch_rows(
             source, self.data_dir,
             'SELECT * FROM t WHERE "时间" LIKE ? ORDER BY "时间"', (f"{prefix}%",))
+        return (rows or [], cols or [])
+
+    def rows_between(self, source: str, start: str, end: str) -> tuple[list, list]:
+        """[start, end) 区间该源所有行(升序)+列名；start/end 形如 YYYY-MM-DD。
+
+        「时间」列存 'YYYY-MM-DD HH:MM'，按前缀做半开区间比较即可覆盖整天，
+        且能吃到 «时间» 索引（对列套 substr/LIKE 则用不上索引）。
+        """
+        rows, cols = fetch_rows(
+            source, self.data_dir,
+            'SELECT * FROM t WHERE "时间" >= ? AND "时间" < ? ORDER BY "时间"',
+            (start, end))
         return (rows or [], cols or [])
 
     def latest_date(self) -> str:

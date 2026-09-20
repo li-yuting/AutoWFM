@@ -62,5 +62,6 @@ login.json
 token.json
 storage_state.json
 
-# ---- 管理器本地状态（自启动勾选）----
+# ---- 管理器本地状态（自启动勾选 / 导出范围勾选）----
 manager_state.json
+export_state.json

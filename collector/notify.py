@@ -1,8 +1,9 @@
 """企微 webhook 推送(定时 markdown 报表 + 排队告警)+ Playwright 截图。"""
-import base64, csv, datetime, hashlib, logging
+import base64, datetime, hashlib, logging
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import requests
+from collector import metrics
 from collector import repository
 from collector._utils import in_window
 
@@ -15,8 +16,9 @@ def _n(v):
 
 
 def _pct(num, den):
-    """num/den 百分比,2 位小数;den 为 0/None/假值 返回 '0.00%'。"""
-    return f"{num / den * 100:.2f}%" if den else "0.00%"
+    """num/den 百分比,2 位小数。口径与看板同源(collector.metrics.pct),
+    只是无分母时给 '0.00%' —— markdown 里不能出现 None。"""
+    return metrics.pct(num, den, "0.00%")
 
 
 def latest_two(data_dir, source, date_str):
@@ -34,18 +36,10 @@ def latest_snapshot(data_dir, source, date_str):
 
 
 def forecast_at(data_dir, line, now_str):
-    """预估流入量.csv 中 线路==line 且 时间==now_str 的 累计预估量;未命中返回 0。"""
-    path = Path(data_dir) / "预估流入量.csv"
-    if not path.exists():
-        return 0
-    with open(path, encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if row.get("线路") == line and row.get("时间") == now_str:
-                try:
-                    return int(row["累计预估量"])
-                except (ValueError, KeyError):
-                    return 0
-    return 0
+    """预估流入量.csv 中 线路==line 且 时间==now_str 的 累计预估量;未命中返回 0。
+
+    实现委托给 collector.metrics（CSV 按 mtime 缓存,与看板共用一份解析结果）。"""
+    return metrics.forecast_at(data_dir, line, now_str)
 
 
 def _render_firstline(now_str, hot, hot_seat, ol, f_hot, f_ol):

@@ -91,6 +91,23 @@ def test_other_source_table_created():
     assert len(rows) == 1
 
 
+def test_rows_between():
+    """rows_between 取 [start, end) 区间（含起始日整天、不含结束日）。"""
+    d = _tmp()
+    for t in ("2026-07-09 09:05", "2026-07-10 09:05", "2026-07-10 21:00", "2026-07-11 09:05"):
+        insert("热线", {"时间": t, "转人工量": 1, "接通量": 1,
+                        "排队量": 0, "累计呼入量": 1, "外呼量": 0, "外呼接通量": 0}, d)
+    r = SQLiteReadOnlyRepository(d)
+    rows, cols = r.rows_between("热线", "2026-07-10", "2026-07-11")
+    assert [row[0] for row in rows] == ["2026-07-10 09:05", "2026-07-10 21:00"], rows
+    assert cols == SCHEMAS["热线"], cols
+    # 起始日整天都含在内、结束日整天都排除在外（升序）
+    rows2, _ = r.rows_between("热线", "2026-07-09", "2026-07-11")
+    assert len(rows2) == 3, rows2
+    # 无库 -> ([], [])
+    assert r.rows_between("贷后", "2026-07-01", "2026-08-01") == ([], [])
+
+
 def main():
     test_write_then_read()
     test_read_empty()
@@ -98,6 +115,7 @@ def main():
     test_ensure_index_idempotent()
     test_month_prefix()
     test_other_source_table_created()
+    test_rows_between()
     shutil.rmtree(_WS_TMP, ignore_errors=True)
     print("repository OK")
 

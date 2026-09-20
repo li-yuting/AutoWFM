@@ -19,11 +19,14 @@ import os
 import subprocess
 import sys
 import threading
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
 from collector._utils import parse_hhmm, fmt_hhmm, load_cfg
+from collector.maintenance import human
+from collector.repository import list_sources
 
 try:
     from pystray import Icon, Menu, MenuItem
@@ -47,16 +50,107 @@ MONITOR_INTERVAL_MS = 5000
 GRACE_SECONDS = 30          # 启动后存活不足此秒数即退出 -> 计为一次失败重启
 MAX_FAILURES = 3
 LOG_PREVIEW_LINES = 80
+EXPORT_GRID_COLS = 7        # 「导出范围」复选框每行个数(库名长短不一,窄窗口可调小)
 
 LOG_DIR.mkdir(exist_ok=True)
-logging.basicConfig(
-    filename=str(MANAGER_LOG),
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    encoding="utf-8",
-)
 log = logging.getLogger("manager")
+
+# 「维护」页的默认保留天数等从 config.yaml 的 maintenance 段读（缺省值见 _maint_cfg）。
+_DEFAULT_KEEP_DAYS = 30
+_DEFAULT_MANAGER_LOG_BACKUPS = 14
+_DEFAULT_CHILD_LOG_MAX_MB = 5
+
+
+def _maint_cfg(cfg: dict | None) -> dict:
+    """maintenance 段的取值（带缺省），键缺失/类型不对都不抛异常。"""
+    m = (cfg or {}).get("maintenance") or {}
+    def _int(key, default):
+        try:
+            return max(1, int(m.get(key, default)))
+        except (TypeError, ValueError):
+            return default
+    return {
+        "keep_days": _int("keep_days", _DEFAULT_KEEP_DAYS),
+        "manager_log_backup_count": _int("manager_log_backup_count", _DEFAULT_MANAGER_LOG_BACKUPS),
+        "child_log_max_mb": _int("child_log_max_mb", _DEFAULT_CHILD_LOG_MAX_MB),
+    }
+
+
+def setup_logging(cfg: dict | None = None) -> None:
+    """管理器日志：写 logs/manager.log，**按天轮转、只保留最近 N 份**。
+
+    原先用 `basicConfig(filename=...)` 只增不减（实测 manager.log 已涨到 4.8MB 且永不清理）。
+    刻意不在导入时执行：测试导入 manager 不应往真实日志文件里写东西。
+    """
+    LOG_DIR.mkdir(exist_ok=True)
+    backups = _maint_cfg(cfg)["manager_log_backup_count"]
+    handler = TimedRotatingFileHandler(str(MANAGER_LOG), when="midnight",
+                                       backupCount=backups, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                                           datefmt="%Y-%m-%d %H:%M:%S"))
+    root = logging.getLogger()
+    for h in list(root.handlers):        # 重复调用时不叠加 handler，否则日志会写两遍
+        root.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
+def _rotate_by_size(path: Path, max_mb: int, backups: int = 1) -> None:
+    """子进程 stdout 日志按大小轮转：超上限就把 `x.log` 挪成 `x.log.1`（旧 `.1` 覆盖）。
+
+    子进程是直接 append 到文件句柄上的，用不了 logging 的轮转，只能在每次启动前查一次大小
+    （一份最多攒到 max_mb，之后每次重启换一份）。失败只记日志，绝不阻断启动。
+    """
+    try:
+        if not path.exists() or path.stat().st_size < max_mb * 1024 * 1024:
+            return
+        for i in range(backups, 1, -1):
+            src = path.with_name(f"{path.name}.{i - 1}")
+            if src.exists():
+                os.replace(src, path.with_name(f"{path.name}.{i}"))
+        os.replace(path, path.with_name(f"{path.name}.1"))
+        log.info("日志已轮转: %s -> %s.1（超过 %sMB）", path.name, path.name, max_mb)
+    except OSError:
+        log.exception("日志轮转失败: %s", path)
+
+
+def format_maint_report(res: dict, applied: bool = False) -> str:
+    """把 collector.maintenance.run() 的结果排成管理器里读的文本（纯函数，便于单测）。"""
+    mark = "已执行清理" if applied else "仅分析（未删除任何文件）"
+    lines = [f"=== 磁盘维护 · {mark} · 保留 {res['keep_days']} 天 ===", "", "目录占用:"]
+    for d in res["目录"]:
+        lines.append(f"  {d['名称']:<12}{d['大小文本']:>10}    {d['文件数']} 个文件")
+    lines += ["",
+              f"可清理: {res['可清理文本']}"
+              f"（{len(res['日志'])} 个日志归档 + {len(res['输出目录'])} 个产物目录）",
+              f"数据库可回收: {res['可回收文本']}"
+              f"（VACUUM {'已执行' if applied else '未执行，点「执行清理」才会压缩'}）"]
+
+    lines += ["", f"[日志归档] {len(res['日志'])} 项，只含轮转归档（正在写的 .log 不在内）"]
+    lines += [f"  {r['天数']:>4} 天前{r['大小文本']:>11}   {r['文件']}" for r in res["日志"]] or ["  无"]
+
+    lines += ["", f"[产物目录] {len(res['输出目录'])} 项（output/YYYY-MM-DD）"]
+    lines += [f"  {r['天数']:>4} 天前{r['大小文本']:>11}   {r['目录']}/   共 {r['文件数']} 个文件"
+              for r in res["输出目录"]] or ["  无"]
+
+    lines += ["", f"[数据库] {len(res['数据库'])} 个库（只做 VACUUM，不删数据）"]
+    for r in res["数据库"]:
+        seg = f"  {r['库']:<14}{human(r['前']):>10}"
+        if applied and not r["错误"]:
+            seg += f"  ->  {human(r['后'])}   回收 {human(r['回收'])}"
+        else:
+            seg += f"   可回收 {human(r['可回收'])}"
+        if r["错误"]:
+            seg += f"   !! {r['错误']}"
+        lines.append(seg)
+
+    lines += ["", f"实际删除条目数: {res['已删条目数']}"] if applied else \
+             ["", "提示: 以上只是清单。点「执行清理」并在确认框里点「是」才会真正删除。"]
+    return "\n".join(lines)
 
 AUTOSTART_LNK = Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs/Startup/AutoWFM.lnk"
 
@@ -106,6 +200,26 @@ def save_auto_start_state(state: dict[str, bool]) -> None:
     tmp = AUTO_START_STATE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, AUTO_START_STATE)
+
+
+EXPORT_STATE = ROOT / "export_state.json"  # 「导出范围」勾选持久化(源名列表)
+
+
+def load_export_state() -> list[str] | None:
+    """读取上次勾选的源名;文件缺失/损坏返回 None(视为全选)。"""
+    try:
+        data = json.loads(EXPORT_STATE.read_text(encoding="utf-8"))
+        srcs = data.get("sources")
+        return [str(s) for s in srcs] if isinstance(srcs, list) else None
+    except Exception:
+        return None
+
+
+def save_export_state(sources: list[str]) -> None:
+    """原子写入(同 load_auto_start_state 一套写法);单独存,不与自启动勾选共用文件。"""
+    tmp = EXPORT_STATE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"sources": sources}, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, EXPORT_STATE)
 
 
 def _make_tray_image():
@@ -201,7 +315,8 @@ class ManagedTask:
     def __init__(self, name: str, module: str, log_path: Path, capture_log: bool,
                  env_extra: dict | None = None, cwd: Path | None = None,
                  match_key: str | None = None, auto_enabled: bool = True,
-                 cmd: list[str] | None = None):
+                 cmd: list[str] | None = None,
+                 log_max_mb: int = _DEFAULT_CHILD_LOG_MAX_MB):
         self.name = name
         self.module = module                      # "collector.main" / "dashboard.app"
         self.cwd = cwd or ROOT                    # 运行工作目录(脚本所属项目目录)
@@ -212,6 +327,7 @@ class ManagedTask:
         self.cmd = cmd if cmd is not None else [PYTHON, "-m", module]
         self.log_path = log_path
         self.capture_log = capture_log            # True -> 把子进程 stdout 写入 log_path
+        self.log_max_mb = log_max_mb              # 启动前超过此大小就把 stdout 日志轮转掉
         self.env_extra = env_extra or {}
 
         self.process: subprocess.Popen | None = None
@@ -300,6 +416,7 @@ class ManagedTask:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         try:
             if self.capture_log:
+                _rotate_by_size(self.log_path, self.log_max_mb)   # 防 stdout 日志无限增长
                 self._log_handle = open(self.log_path, "ab")
                 stdout = self._log_handle
             else:
@@ -474,7 +591,9 @@ class ManagerUI:
         self.root.geometry("980x680")
         self.root.minsize(820, 560)
 
-        self.tasks: list[ManagedTask] = [ManagedTask(**d) for d in TASK_DEFS]
+        self.tasks: list[ManagedTask] = [
+            ManagedTask(**d, log_max_mb=_maint_cfg(cfg)["child_log_max_mb"]) for d in TASK_DEFS
+        ]
         # 恢复「自启动」勾选状态(仅自动启停任务;缺省视为勾选)
         self._auto_start_vars: dict[str, tk.BooleanVar] = {}
         _state = load_auto_start_state()
@@ -494,6 +613,8 @@ class ManagerUI:
         self._ml_running = False   # 接待上限执行去重锁
         self._ml_cancel = False    # 逐人中断标记
         self._ml_sched = []        # 两个预约行状态(在 _build_member_limit_page 填充)
+        self._export_running = False  # CSV 导出去重锁
+        self._maint_running = False   # 磁盘维护去重锁
         self._build_ui()
         self._build_tray()
         self._refresh()
@@ -569,6 +690,14 @@ class ManagerUI:
         ml_page.grid(row=0, column=0, sticky="nsew")
         self._build_member_limit_page(ml_page)
         nav_items.append(("接待上限", ml_page))
+        ex_page = tk.Frame(content)
+        ex_page.grid(row=0, column=0, sticky="nsew")
+        self._build_export_page(ex_page)
+        nav_items.append(("导出 CSV", ex_page))
+        mt_page = tk.Frame(content)
+        mt_page.grid(row=0, column=0, sticky="nsew")
+        self._build_maint_page(mt_page)
+        nav_items.append(("磁盘维护", mt_page))
 
         self._nav_pages = [page for _, page in nav_items]
         # 三个工具按钮:导航列底部(接待上限下方空白),从下往上摆;
@@ -1084,6 +1213,226 @@ class ManagerUI:
                 if not started:
                     st["status"].set("已跳过")
 
+    # ---- 导出 CSV(各源 sqlite -> csv,全量或按日期范围)----
+    def _build_export_page(self, page: tk.Frame) -> None:
+        top = tk.Frame(page, padx=10, pady=8)
+        top.pack(fill=tk.X)
+        tk.Label(top, text="开始日期:").pack(side=tk.LEFT)
+        self.ex_start_var = tk.StringVar()
+        tk.Entry(top, width=12, textvariable=self.ex_start_var).pack(side=tk.LEFT, padx=4)
+        tk.Label(top, text="结束日期:").pack(side=tk.LEFT)
+        self.ex_end_var = tk.StringVar()
+        tk.Entry(top, width=12, textvariable=self.ex_end_var).pack(side=tk.LEFT, padx=4)
+        tk.Label(top, text="留空 = 全量", fg="#777777").pack(side=tk.LEFT, padx=(4, 0))
+
+        # 导出范围:data/ 下所有源库,勾选持久化到 export_state.json(与自启动状态分开存)
+        rng = tk.LabelFrame(page, text="导出范围", padx=8, pady=6)
+        rng.pack(fill=tk.X, padx=10, pady=(0, 6))
+        bar = tk.Frame(rng)
+        bar.pack(fill=tk.X)
+        self.ex_count_var = tk.StringVar()
+        self.ex_count_label = tk.Label(bar, textvariable=self.ex_count_var, fg="#555555")
+        self.ex_count_label.pack(side=tk.LEFT)
+        for label, val in (("反选", "inv"), ("全不选", False), ("全选", True)):
+            tk.Button(bar, text=label, width=6,
+                      command=lambda v=val: self._set_all_sources(v)).pack(side=tk.RIGHT, padx=2)
+        grid = tk.Frame(rng)
+        grid.pack(fill=tk.X, pady=(4, 0))
+        data_dir = self._data_dir()
+        names = list_sources(data_dir)
+        saved = load_export_state()          # None = 无记录 -> 默认全选
+        self._ex_vars: list[tuple[str, tk.BooleanVar]] = []
+        for i, name in enumerate(names):
+            var = tk.BooleanVar(value=(name in saved) if saved is not None else True)
+            self._ex_vars.append((name, var))
+            # 按行铺开(不固定 width,让每个复选框占自然宽度),每行 EXPORT_GRID_COLS 个
+            tk.Checkbutton(grid, text=name, variable=var, anchor="w",
+                           command=self._sync_ex_count).grid(
+                row=i // EXPORT_GRID_COLS, column=i % EXPORT_GRID_COLS,
+                sticky="w", padx=(0, 12))
+        if names:
+            self._sync_ex_count()
+        else:
+            tk.Label(grid, text=f"{data_dir} 下没有 .db 文件", fg="#aa2222").grid(row=0, column=0, sticky="w")
+
+        act = tk.Frame(page, padx=10, pady=4)
+        act.pack(fill=tk.X)
+        self.btn_export = tk.Button(act, text="一键导出 CSV", width=14, command=self._run_export)
+        self.btn_export.pack(side=tk.LEFT, padx=(0, 8))
+        self.ex_status_var = tk.StringVar(value="就绪")
+        tk.Label(act, textvariable=self.ex_status_var, fg="#555555").pack(side=tk.LEFT)
+        self.ex_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
+        self.ex_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
+        self.ex_box.configure(state=tk.DISABLED)
+        self._box_set(
+            self.ex_box,
+            "把勾选的源库 SQLite 表导出为 CSV(每库一个文件，utf-8-sig，Excel 直接打开不乱码)。\n"
+            "日期留空 = 全量导出；填 YYYY-MM-DD 则只导该区间(含首尾，按「时间」列)。\n"
+            "只填一侧时另一侧自动补齐(等同单日)。勾选会记住，下次打开沿用。\n"
+            "输出: output/YYYY-MM-DD/<源名>.csv (直接落在当天文件夹,同名覆盖)")
+
+    def _data_dir(self) -> Path:
+        """config 里的数据目录(相对路径按项目根解析,不依赖 cwd)。"""
+        d = Path(self.cfg["storage"]["dir"])
+        return d if d.is_absolute() else ROOT / d
+
+    def _set_all_sources(self, val) -> None:
+        """val: True 全选 / False 全不选 / 'inv' 反选。"""
+        for _name, var in self._ex_vars:
+            var.set(not var.get() if val == "inv" else bool(val))
+        self._sync_ex_count()
+
+    def _sync_ex_count(self) -> None:
+        """刷新「已选 n/m」并把当前勾选落盘(每次改动都写,9 项,开销可忽略)。"""
+        picked = [n for n, var in self._ex_vars if var.get()]
+        self.ex_count_var.set(f"已选 {len(picked)}/{len(self._ex_vars)}")
+        self.ex_count_label.configure(fg="#aa2222" if not picked else "#555555")
+        save_export_state(picked)
+
+    def _run_export(self) -> None:
+        if self._export_running:
+            return
+        # 日期:留空 = 全量;只填一侧时另一侧补齐(等同单日);"2026-9-1" 自动补零成 "2026-09-01"
+        raw_start, raw_end = self.ex_start_var.get().strip(), self.ex_end_var.get().strip()
+        start = end = ""
+        for which, v in (("start", raw_start), ("end", raw_end)):
+            if not v:
+                continue
+            try:
+                v = dt.datetime.strptime(v, "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError:
+                self.ex_status_var.set(f"日期格式错误: {v}")
+                return
+            if which == "start":
+                start = v
+            else:
+                end = v
+        if start and not end:
+            end = start
+        elif end and not start:
+            start = end
+        self.ex_start_var.set(start)     # 回填规范化后的值,界面即实际导出范围
+        self.ex_end_var.set(end)
+        if start > end:
+            self.ex_status_var.set("开始>结束")
+            return
+        sources = [n for n, var in self._ex_vars if var.get()]
+        if not sources:
+            self.ex_status_var.set("未选任何库")
+            return
+        data_dir = self._data_dir()
+        now = dt.datetime.now()
+        out_dir = ROOT / "output" / now.strftime("%Y-%m-%d")   # 直接落当天文件夹(已存在则复用)
+        scope = f"{start} ~ {end}" if start else "全量"
+        self._export_running = True
+        self.btn_export.configure(state=tk.DISABLED)
+        self.ex_status_var.set("导出中...")
+        self._box_set(self.ex_box, f"范围: {scope}    库: {len(sources)} 个\n"
+                                   f"源目录: {data_dir}\n输出到: {out_dir}\n")
+
+        def fn():
+            from collector.repository import export_csv
+            rows = export_csv(data_dir, out_dir, start, end, sources, self._on_export_progress)
+            total = sum(r["行数"] for r in rows)
+            detail = "\n".join(f'{r["源"]:<8}{r["行数"]:>8}   {Path(r["文件"]).name}' for r in rows)
+            return f"{'源':<8}{'行数':>8}   文件\n{detail}\n\n合计 {len(rows)} 个库 / {total} 行\n目录: {out_dir}"
+
+        self._run_bg(fn, self._on_export_done, "export_csv")
+
+    def _on_export_progress(self, text: str) -> None:
+        self.root.after(0, self._box_append, self.ex_box, text)
+
+    def _on_export_done(self, summary: str, err: Exception | None) -> None:
+        self._export_running = False
+        self.btn_export.configure(state=tk.NORMAL)
+        if err is not None:
+            self.ex_status_var.set("失败")
+            self._box_append(self.ex_box, f"\n导出失败: {err}\n详见 logs/manager.log")
+        else:
+            self.ex_status_var.set("完成")
+            self._box_append(self.ex_box, "\n=== 汇总 ===\n" + summary)
+
+    # ---- 磁盘维护(日志归档 / 产物目录 / 数据库空洞)----
+    def _build_maint_page(self, page: tk.Frame) -> None:
+        top = tk.Frame(page, padx=10, pady=8)
+        top.pack(fill=tk.X)
+        tk.Label(top, text="保留天数:").pack(side=tk.LEFT)
+        self.mt_days_var = tk.StringVar(value=str(_maint_cfg(self.cfg)["keep_days"]))
+        tk.Entry(top, width=6, textvariable=self.mt_days_var).pack(side=tk.LEFT, padx=4)
+        tk.Label(top, text="留空/非法则用 config.yaml 的缺省", fg="#777777").pack(side=tk.LEFT, padx=(2, 12))
+        self.btn_maint_scan = tk.Button(top, text="分析（只看不动）", width=16,
+                                       command=lambda: self._run_maint(apply=False))
+        self.btn_maint_scan.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_maint_apply = tk.Button(top, text="执行清理…", width=12,
+                                        command=lambda: self._run_maint(apply=True))
+        self.btn_maint_apply.pack(side=tk.LEFT)
+
+        act = tk.Frame(page, padx=10, pady=2)
+        act.pack(fill=tk.X)
+        self.mt_status_var = tk.StringVar(value="就绪")
+        tk.Label(act, textvariable=self.mt_status_var, fg="#555555").pack(side=tk.LEFT)
+
+        self.mt_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
+        self.mt_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
+        self.mt_box.configure(state=tk.DISABLED)
+        self._box_set(
+            self.mt_box,
+            "磁盘维护：给 logs/ 与 output/ 定保留期，并压缩 data/*.db 的空洞。\n\n"
+            "「分析」只盘点、不落刀：列出可清理的日志归档、output 按日目录、各库可回收空间。\n"
+            "「执行清理」会先弹确认框，确认后才真删。删的范围只有两种：\n"
+            "  - logs/ 下超过保留天数的轮转归档（x.log.YYYY-MM-DD / x.log.N）\n"
+            "  - output/ 下超过保留天数的 YYYY-MM-DD 按日目录\n"
+            "正在写的 x.log、非按日命名的目录一律不动；data/*.db 只做 VACUUM 压缩，不删数据。\n\n"
+            "保留天数见 config.yaml 的 maintenance.keep_days，上面输入框可临时覆盖。")
+
+    def _maint_days(self) -> int:
+        """保留天数：输入框优先，留空/非法/小于 1 则回落配置缺省。"""
+        raw = self.mt_days_var.get().strip()
+        if raw:
+            try:
+                if int(raw) >= 1:
+                    return int(raw)
+            except ValueError:
+                pass
+        return _maint_cfg(self.cfg)["keep_days"]
+
+    def _run_maint(self, apply: bool) -> None:
+        if self._maint_running:
+            return
+        days = self._maint_days()
+        if apply and not messagebox.askyesno(
+                "执行清理",
+                f"将删除：\n"
+                f"  · logs/ 下超过 {days} 天的轮转日志\n"
+                f"  · output/ 下超过 {days} 天的 YYYY-MM-DD 目录\n\n"
+                "正在写的 x.log、非按日目录、data/*.db 都不会被删。\n"
+                "建议先点「分析」看清清单。是否继续？"):
+            return
+        self._maint_running = True
+        self.btn_maint_scan.configure(state=tk.DISABLED)
+        self.btn_maint_apply.configure(state=tk.DISABLED)
+        self.mt_status_var.set("清理中..." if apply else "分析中...")
+        self._box_set(self.mt_box, f"保留天数: {days}\n")
+
+        def fn():
+            from collector.maintenance import run
+            return run(ROOT / "logs", ROOT / "output", self._data_dir(),
+                       keep_days=days, apply=apply,
+                       progress_cb=lambda t: self.root.after(0, self._box_append, self.mt_box, t))
+
+        self._run_bg(fn, lambda res, err: self._on_maint_done(res, err, apply), "maintenance")
+
+    def _on_maint_done(self, res, err, apply: bool) -> None:
+        self._maint_running = False
+        self.btn_maint_scan.configure(state=tk.NORMAL)
+        self.btn_maint_apply.configure(state=tk.NORMAL)
+        if err is not None:
+            self.mt_status_var.set("失败")
+            self._box_append(self.mt_box, f"\n维护失败: {err}\n详见 logs/manager.log")
+            return
+        self.mt_status_var.set("已清理" if apply else "分析完成")
+        self._box_set(self.mt_box, format_maint_report(res, applied=apply))
+
     # ---- 重启控制台(拉新进程、不停子进程,新窗口自动接管)----
     def _restart_manager(self) -> None:
         if not messagebox.askyesno("重启控制台",
@@ -1142,14 +1491,17 @@ def _acquire_single_instance_lock() -> bool:
 
 
 def main() -> None:
-    if not _acquire_single_instance_lock():
-        log.warning("检测到另一 manager 实例已在运行，本次启动直接退出（单实例守卫）")
-        return
     try:
         cfg = load_cfg(CONFIG_PATH)
     except Exception as exc:
+        setup_logging()          # 配置读不到时也要能留痕，所以先按缺省配一次日志
+        log.error("无法读取 config.yaml: %s", exc)
         root = tk.Tk()
         messagebox.showerror("启动失败", f"无法读取 config.yaml:\n{exc}")
+        return
+    setup_logging(cfg)           # 按 maintenance.manager_log_backup_count 决定保留份数
+    if not _acquire_single_instance_lock():
+        log.warning("检测到另一 manager 实例已在运行，本次启动直接退出（单实例守卫）")
         return
     # pythonw 无 stderr，Tkinter 默认 report_callback_exception 会静默吞掉 UI 异常 -> 记到 manager.log
     def _log_tk_exception(self, exc, val, tb):
