@@ -3,7 +3,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from member_limit.core import (classify_member, classify_edit_result,
-                                   build_summary, format_summary)
+                                   build_summary, format_summary, choose_page_size)
 
 
 def test_classify_member():
@@ -50,12 +50,24 @@ def test_format_summary_dry_run():
     assert "[修改成功] 0 人：无" in text
 
 
+def test_choose_page_size():
+    options = ["10", "30", "50", "暂无数据", "MirrorGroup", "10"]
+    assert choose_page_size(options, 50) == "50"
+    try:
+        choose_page_size(["10", "30"], 50)
+    except RuntimeError as exc:
+        assert "50" in str(exc)
+    else:
+        raise AssertionError("缺少目标页大小时应失败")
+
+
 def main():
     test_classify_member()
     test_classify_edit_result()
     test_build_summary()
     test_format_summary_cancelled()
     test_format_summary_dry_run()
+    test_choose_page_size()
     print("test_member_limit_core OK")
 
 

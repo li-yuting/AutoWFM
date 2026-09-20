@@ -11,6 +11,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 PROFILE_DIR = BASE_DIR / "chrome_profile"   # 持久登录态（git-ignored）
 MAX_PAGES = 20                               # 最大翻页数（防死循环）
+PAGE_SIZE = 50                               # 固定每页显示人数
 
 
 # ---- 纯逻辑（可单测，不依赖浏览器）----
@@ -43,6 +44,16 @@ def build_summary(changed, already, unverified, failed, not_found,
         "cancelled": bool(cancelled),
         "dry_run": bool(dry_run),
     }
+
+
+def choose_page_size(options, target: int = PAGE_SIZE) -> str:
+    """确认目标页大小可用；不存在时终止本轮，避免静默按旧页大小执行。"""
+    labels = [str(o).strip() for o in options]
+    wanted = str(target)
+    if wanted not in labels:
+        available = "、".join(labels) or "无"
+        raise RuntimeError(f"成员页没有 {wanted} 人/页选项，实际可选：{available}")
+    return wanted
 
 
 # 汇总行模板: (标签, 汇总键, 元素格式化)。行元素为 str 时原样拼接。
@@ -130,6 +141,36 @@ def _page_number(page) -> str:
         return "?"
 
 
+def _set_page_size(page, target: int = PAGE_SIZE, cb=None) -> None:
+    """进入成员页后固定每页显示人数，并等待分页回到第 1 页。"""
+    try:
+        value = page.locator(".trtc-tea-pagination .trtc-tea-dropdown__value")
+        if value.inner_text().strip() == str(target):
+            _say(cb, f">> 每页显示人数已是 {target}")
+            return
+        page.locator(".trtc-tea-pagination .trtc-tea-dropdown__header").click()
+        page.wait_for_timeout(400)
+        items = page.locator(".trtc-tea-list--option li")
+        labels = [items.nth(i).inner_text().strip() for i in range(items.count())]
+        chosen = choose_page_size(labels, target)
+        page.locator(".trtc-tea-list--option").get_by_text(chosen, exact=True).first.click()
+        page.wait_for_function(
+            "(expected) => {"
+            " const value = document.querySelector('.trtc-tea-pagination .trtc-tea-dropdown__value');"
+            " const pageNum = document.querySelector('.trtc-tea-pagination__inputpagenum');"
+            " return value?.textContent.trim() === expected && pageNum?.value === '1';"
+            "}",
+            arg=chosen,
+            timeout=15000,
+        )
+        page.wait_for_timeout(1000)
+        _say(cb, f">> 每页显示人数已设为 {target}")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"设置每页显示人数为 {target} 失败：{exc}") from exc
+
+
 def _click_next(page) -> bool:
     nxt = page.locator(".trtc-tea-pagination__nextbtn")
     if "is-disabled" in (nxt.get_attribute("class") or ""):
@@ -205,6 +246,7 @@ def run_member_limit(config: dict, progress_cb=None, should_cancel=None,
             page.locator("a").filter(has_text="成员").click()
             page.wait_for_timeout(3000)
             _say(progress_cb, f"已进入成员页：{page.url}")
+            _set_page_size(page, PAGE_SIZE, progress_cb)
 
             for page_num in range(1, MAX_PAGES + 1):
                 if not pending:
