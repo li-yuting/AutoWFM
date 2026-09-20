@@ -85,5 +85,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         xlsx = Path(sys.argv[1])
     else:
-        xlsx = DATA_DIR / "量级预估20260909.xlsx"
+        xlsx = DATA_DIR / "量级预估20260920.xlsx"
     transform_forecast(xlsx)
