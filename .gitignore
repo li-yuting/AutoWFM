@@ -46,6 +46,7 @@ Thumbs.db
 .agents/
 .reasonix/
 .superpowers/
+.worktrees/
 .workbuddy/
 reasonix.toml
 面试准备.md
