@@ -25,7 +25,7 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
 from collector._utils import parse_hhmm, fmt_hhmm, load_cfg
-from collector.maintenance import human
+from collector.maintenance import human, prune_logs
 from collector.repository import list_sources
 
 try:
@@ -55,10 +55,11 @@ EXPORT_GRID_COLS = 7        # 「导出范围」复选框每行个数(库名长�
 LOG_DIR.mkdir(exist_ok=True)
 log = logging.getLogger("manager")
 
-# 「维护」页的默认保留天数等从 config.yaml 的 maintenance 段读（缺省值见 _maint_cfg）。
+# 日志保留参数从 config.yaml 的 maintenance 段读（缺省值见 _maint_cfg）。
 _DEFAULT_KEEP_DAYS = 30
 _DEFAULT_MANAGER_LOG_BACKUPS = 14
 _DEFAULT_CHILD_LOG_MAX_MB = 5
+LOG_PRUNE_AT = dt.time(5, 0)
 
 
 def _maint_cfg(cfg: dict | None) -> dict:
@@ -74,6 +75,11 @@ def _maint_cfg(cfg: dict | None) -> dict:
         "manager_log_backup_count": _int("manager_log_backup_count", _DEFAULT_MANAGER_LOG_BACKUPS),
         "child_log_max_mb": _int("child_log_max_mb", _DEFAULT_CHILD_LOG_MAX_MB),
     }
+
+
+def log_prune_due(now: dt.datetime, last_run: dt.date | None) -> bool:
+    """当天 05:00 后且本进程尚未触发过日志清理。"""
+    return now.time() >= LOG_PRUNE_AT and last_run != now.date()
 
 
 def setup_logging(cfg: dict | None = None) -> None:
@@ -117,40 +123,6 @@ def _rotate_by_size(path: Path, max_mb: int, backups: int = 1) -> None:
     except OSError:
         log.exception("日志轮转失败: %s", path)
 
-
-def format_maint_report(res: dict, applied: bool = False) -> str:
-    """把 collector.maintenance.run() 的结果排成管理器里读的文本（纯函数，便于单测）。"""
-    mark = "已执行清理" if applied else "仅分析（未删除任何文件）"
-    lines = [f"=== 磁盘维护 · {mark} · 保留 {res['keep_days']} 天 ===", "", "目录占用:"]
-    for d in res["目录"]:
-        lines.append(f"  {d['名称']:<12}{d['大小文本']:>10}    {d['文件数']} 个文件")
-    lines += ["",
-              f"可清理: {res['可清理文本']}"
-              f"（{len(res['日志'])} 个日志归档 + {len(res['输出目录'])} 个产物目录）",
-              f"数据库可回收: {res['可回收文本']}"
-              f"（VACUUM {'已执行' if applied else '未执行，点「执行清理」才会压缩'}）"]
-
-    lines += ["", f"[日志归档] {len(res['日志'])} 项，只含轮转归档（正在写的 .log 不在内）"]
-    lines += [f"  {r['天数']:>4} 天前{r['大小文本']:>11}   {r['文件']}" for r in res["日志"]] or ["  无"]
-
-    lines += ["", f"[产物目录] {len(res['输出目录'])} 项（output/YYYY-MM-DD）"]
-    lines += [f"  {r['天数']:>4} 天前{r['大小文本']:>11}   {r['目录']}/   共 {r['文件数']} 个文件"
-              for r in res["输出目录"]] or ["  无"]
-
-    lines += ["", f"[数据库] {len(res['数据库'])} 个库（只做 VACUUM，不删数据）"]
-    for r in res["数据库"]:
-        seg = f"  {r['库']:<14}{human(r['前']):>10}"
-        if applied and not r["错误"]:
-            seg += f"  ->  {human(r['后'])}   回收 {human(r['回收'])}"
-        else:
-            seg += f"   可回收 {human(r['可回收'])}"
-        if r["错误"]:
-            seg += f"   !! {r['错误']}"
-        lines.append(seg)
-
-    lines += ["", f"实际删除条目数: {res['已删条目数']}"] if applied else \
-             ["", "提示: 以上只是清单。点「执行清理」并在确认框里点「是」才会真正删除。"]
-    return "\n".join(lines)
 
 AUTOSTART_LNK = Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs/Startup/AutoWFM.lnk"
 
@@ -614,7 +586,8 @@ class ManagerUI:
         self._ml_cancel = False    # 逐人中断标记
         self._ml_sched = []        # 两个预约行状态(在 _build_member_limit_page 填充)
         self._export_running = False  # CSV 导出去重锁
-        self._maint_running = False   # 磁盘维护去重锁
+        self._log_prune_running = False
+        self._log_prune_last_run: dt.date | None = None
         self._build_ui()
         self._build_tray()
         self._refresh()
@@ -694,10 +667,6 @@ class ManagerUI:
         ex_page.grid(row=0, column=0, sticky="nsew")
         self._build_export_page(ex_page)
         nav_items.append(("导出 CSV", ex_page))
-        mt_page = tk.Frame(content)
-        mt_page.grid(row=0, column=0, sticky="nsew")
-        self._build_maint_page(mt_page)
-        nav_items.append(("磁盘维护", mt_page))
 
         self._nav_pages = [page for _, page in nav_items]
         # 三个工具按钮:导航列底部(接待上限下方空白),从下往上摆;
@@ -750,6 +719,7 @@ class ManagerUI:
             now = dt.datetime.now().astimezone()  # aware,与 started_at 对齐,避免 now-started_at 时区不一致抛 TypeError
             self.schedule_var.set(schedule_text(self.cfg, now))
             self._check_member_limit_schedules(now)
+            self._check_log_prune(now)
             in_win = in_run_window(self.cfg, now)
             for task in self.tasks:
                 for ev in task.tick(in_win, now):
@@ -762,6 +732,34 @@ class ManagerUI:
         except Exception:
             log.exception("监控循环异常")
         self.root.after(MONITOR_INTERVAL_MS, self._refresh)
+
+    def _check_log_prune(self, now: dt.datetime) -> None:
+        """05:00 后静默清理过期日志；同日每个管理器进程只触发一次。"""
+        if self._log_prune_running or not log_prune_due(now, self._log_prune_last_run):
+            return
+        self._log_prune_last_run = now.date()
+        self._log_prune_running = True
+
+        def fn():
+            return prune_logs(LOG_DIR, keep_days=_maint_cfg(self.cfg)["keep_days"])
+
+        self._run_bg(fn, self._on_log_prune_done, "log_prune")
+
+    def _on_log_prune_done(self, rows: list[dict], err: Exception | None) -> None:
+        self._log_prune_running = False
+        if err is not None:
+            return   # _run_bg 已记录异常；静默模式不弹窗
+        removed = [row for row in rows if row["已删"]]
+        failed = [row for row in rows if row["错误"]]
+        if failed:
+            log.warning("静默日志清理部分失败: 删除 %s 个, 失败 %s 个",
+                        len(removed), len(failed))
+        elif removed:
+            freed = sum(row["大小"] for row in removed)
+            log.info("静默日志清理完成: 删除 %s 个归档, 释放 %s",
+                     len(removed), human(freed))
+        else:
+            log.info("静默日志清理完成: 无过期归档")
 
     def _update_status(self) -> None:
         for task, vars_ in zip(self.tasks, self._vars):
@@ -1351,87 +1349,6 @@ class ManagerUI:
         else:
             self.ex_status_var.set("完成")
             self._box_append(self.ex_box, "\n=== 汇总 ===\n" + summary)
-
-    # ---- 磁盘维护(日志归档 / 产物目录 / 数据库空洞)----
-    def _build_maint_page(self, page: tk.Frame) -> None:
-        top = tk.Frame(page, padx=10, pady=8)
-        top.pack(fill=tk.X)
-        tk.Label(top, text="保留天数:").pack(side=tk.LEFT)
-        self.mt_days_var = tk.StringVar(value=str(_maint_cfg(self.cfg)["keep_days"]))
-        tk.Entry(top, width=6, textvariable=self.mt_days_var).pack(side=tk.LEFT, padx=4)
-        tk.Label(top, text="留空/非法则用 config.yaml 的缺省", fg="#777777").pack(side=tk.LEFT, padx=(2, 12))
-        self.btn_maint_scan = tk.Button(top, text="分析（只看不动）", width=16,
-                                       command=lambda: self._run_maint(apply=False))
-        self.btn_maint_scan.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_maint_apply = tk.Button(top, text="执行清理…", width=12,
-                                        command=lambda: self._run_maint(apply=True))
-        self.btn_maint_apply.pack(side=tk.LEFT)
-
-        act = tk.Frame(page, padx=10, pady=2)
-        act.pack(fill=tk.X)
-        self.mt_status_var = tk.StringVar(value="就绪")
-        tk.Label(act, textvariable=self.mt_status_var, fg="#555555").pack(side=tk.LEFT)
-
-        self.mt_box = scrolledtext.ScrolledText(page, wrap=tk.WORD, font=("Consolas", 10))
-        self.mt_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 10))
-        self.mt_box.configure(state=tk.DISABLED)
-        self._box_set(
-            self.mt_box,
-            "磁盘维护：给 logs/ 与 output/ 定保留期，并压缩 data/*.db 的空洞。\n\n"
-            "「分析」只盘点、不落刀：列出可清理的日志归档、output 按日目录、各库可回收空间。\n"
-            "「执行清理」会先弹确认框，确认后才真删。删的范围只有两种：\n"
-            "  - logs/ 下超过保留天数的轮转归档（x.log.YYYY-MM-DD / x.log.N）\n"
-            "  - output/ 下超过保留天数的 YYYY-MM-DD 按日目录\n"
-            "正在写的 x.log、非按日命名的目录一律不动；data/*.db 只做 VACUUM 压缩，不删数据。\n\n"
-            "保留天数见 config.yaml 的 maintenance.keep_days，上面输入框可临时覆盖。")
-
-    def _maint_days(self) -> int:
-        """保留天数：输入框优先，留空/非法/小于 1 则回落配置缺省。"""
-        raw = self.mt_days_var.get().strip()
-        if raw:
-            try:
-                if int(raw) >= 1:
-                    return int(raw)
-            except ValueError:
-                pass
-        return _maint_cfg(self.cfg)["keep_days"]
-
-    def _run_maint(self, apply: bool) -> None:
-        if self._maint_running:
-            return
-        days = self._maint_days()
-        if apply and not messagebox.askyesno(
-                "执行清理",
-                f"将删除：\n"
-                f"  · logs/ 下超过 {days} 天的轮转日志\n"
-                f"  · output/ 下超过 {days} 天的 YYYY-MM-DD 目录\n\n"
-                "正在写的 x.log、非按日目录、data/*.db 都不会被删。\n"
-                "建议先点「分析」看清清单。是否继续？"):
-            return
-        self._maint_running = True
-        self.btn_maint_scan.configure(state=tk.DISABLED)
-        self.btn_maint_apply.configure(state=tk.DISABLED)
-        self.mt_status_var.set("清理中..." if apply else "分析中...")
-        self._box_set(self.mt_box, f"保留天数: {days}\n")
-
-        def fn():
-            from collector.maintenance import run
-            return run(ROOT / "logs", ROOT / "output", self._data_dir(),
-                       keep_days=days, apply=apply,
-                       progress_cb=lambda t: self.root.after(0, self._box_append, self.mt_box, t))
-
-        self._run_bg(fn, lambda res, err: self._on_maint_done(res, err, apply), "maintenance")
-
-    def _on_maint_done(self, res, err, apply: bool) -> None:
-        self._maint_running = False
-        self.btn_maint_scan.configure(state=tk.NORMAL)
-        self.btn_maint_apply.configure(state=tk.NORMAL)
-        if err is not None:
-            self.mt_status_var.set("失败")
-            self._box_append(self.mt_box, f"\n维护失败: {err}\n详见 logs/manager.log")
-            return
-        self.mt_status_var.set("已清理" if apply else "分析完成")
-        self._box_set(self.mt_box, format_maint_report(res, applied=apply))
 
     # ---- 重启控制台(拉新进程、不停子进程,新窗口自动接管)----
     def _restart_manager(self) -> None:

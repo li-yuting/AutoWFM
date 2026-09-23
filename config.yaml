@@ -23,7 +23,7 @@ storage:
 logging:
   path: "logs/autowfm.log"
 maintenance:
-  keep_days: 30                 # logs 轮转归档 & output 按日目录保留天数（超过即列为可清理）
+  keep_days: 30                 # logs 轮转归档保留天数（超过即自动删除）
   manager_log_backup_count: 14  # manager.log 按天轮转后保留份数
   child_log_max_mb: 5           # 看板/API 等子进程 stdout 日志超过此大小则在下次启动时轮转
 

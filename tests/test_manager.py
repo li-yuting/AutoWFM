@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from manager import (compute_auto_start, auto_stop_minutes, in_run_window, schedule_text,
                        ManagerUI, ManagedTask, GRACE_SECONDS, parse_schedule, schedule_action,
-                       load_auto_start_state, save_auto_start_state)
+                       load_auto_start_state, save_auto_start_state,
+                       log_prune_due)
 
 SH = ZoneInfo("Asia/Shanghai")
 
@@ -81,6 +82,48 @@ def test_schedule_action():
     assert schedule_action(True, t, t, True) == "idle"            # 已触发过
     assert schedule_action(True, t, None, False) == "idle"        # 时间非法
     print("schedule_action OK")
+
+
+def test_log_prune_due_boundaries():
+    """05:00 前不触发；到点、晚启动和跨天触发；同日不重复。"""
+    before = dt.datetime(2026, 9, 23, 4, 59, tzinfo=SH)
+    at = dt.datetime(2026, 9, 23, 5, 0, tzinfo=SH)
+    later = dt.datetime(2026, 9, 23, 8, 0, tzinfo=SH)
+    next_day = dt.datetime(2026, 9, 24, 5, 0, tzinfo=SH)
+    yesterday = dt.date(2026, 9, 22)
+    today = dt.date(2026, 9, 23)
+
+    assert log_prune_due(before, None) is False
+    assert log_prune_due(at, None) is True
+    assert log_prune_due(later, None) is True, "05:00 后启动应补跑"
+    assert log_prune_due(later, yesterday) is True
+    assert log_prune_due(later, today) is False, "同日不得重复"
+    assert log_prune_due(next_day, today) is True
+    print("log_prune_due_boundaries OK")
+
+
+def test_check_log_prune_runs_once_per_process_day():
+    """管理器同日只启动一次日志清理，后台运行期间也不重复启动。"""
+    ui = ManagerUI.__new__(ManagerUI)
+    ui.cfg = _cfg()
+    ui._log_prune_running = False
+    ui._log_prune_last_run = None
+    calls = []
+    ui._run_bg = lambda fn, on_done, name: calls.append(name)
+
+    now = dt.datetime(2026, 9, 23, 5, 0, tzinfo=SH)
+    ui._check_log_prune(now)
+    assert calls == ["log_prune"], calls
+
+    ui._log_prune_running = False
+    ui._check_log_prune(now + dt.timedelta(minutes=5))
+    assert calls == ["log_prune"], "同日不应重复触发"
+
+    ui._log_prune_last_run = None
+    ui._log_prune_running = True
+    ui._check_log_prune(now)
+    assert calls == ["log_prune"], "后台运行期间不应重复触发"
+    print("check_log_prune_runs_once_per_process_day OK")
 
 
 def test_forecast_summary():
@@ -214,9 +257,11 @@ def test_ui_constructs():
         root.withdraw()
         ui = ManagerUI(root, _cfg())
         try:
-            assert len(ui._nav_buttons) == 7, f"7 个导航按钮, 实际 {len(ui._nav_buttons)}"
-            assert len(ui._nav_pages) == 7, f"7 个内容页, 实际 {len(ui._nav_pages)}"
+            labels = [btn.cget("text") for btn in ui._nav_buttons]
+            assert len(ui._nav_buttons) == 6, f"6 个导航按钮, 实际 {len(ui._nav_buttons)}"
+            assert len(ui._nav_pages) == 6, f"6 个内容页, 实际 {len(ui._nav_pages)}"
             assert len(ui._log_boxes) == 4, f"4 个日志框, 实际 {len(ui._log_boxes)}"
+            assert "磁盘维护" not in labels, labels
         finally:
             root.destroy()
     print("ui_constructs OK")
@@ -488,6 +533,8 @@ def main():
     test_schedule_text()
     test_parse_schedule()
     test_schedule_action()
+    test_log_prune_due_boundaries()
+    test_check_log_prune_runs_once_per_process_day()
     test_forecast_summary()
     test_tick_auto_start()
     test_tick_auto_stop()

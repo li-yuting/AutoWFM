@@ -11,8 +11,8 @@
 | API | `python -m api.app` | FastAPI 只读层（:8081），仅供第三方只读消费 |
 | 排班 | `manager.py` 监管 | `shift/` Flask 子项目：排班计划导入、校验、生成 |
 | 接待上限 | `member_limit/` | headless 批量改腾讯云联络中心成员接待上限，manager.py「接待上限」页手动/预约执行 |
-| 管理器 | `python manager.py` | Tkinter 桌面监管器：自动启停/崩溃重启采集器/API/看板/排班，含进线量预测页（调用 peakflow）、数据补全页、磁盘维护页 |
-| 磁盘维护 | manager.py「磁盘维护」页 | 给 `logs/` 与 `output/` 定保留期、压缩 `data/*.db` 空洞；日志按天/按大小轮转 |
+| 管理器 | `python manager.py` | Tkinter 桌面监管器：自动启停/崩溃重启采集器/API/看板/排班，含进线量预测页（调用 peakflow）、数据补全页 |
+| 日志清理 | manager.py 后台任务 | 每天 05:00 静默删除超过 30 天的轮转日志；不触及其他数据 |
 | 周度预估转换 | `writeforecast/` | 周度预估 Excel → `data/预估流入量.csv` |
 
 入口（`collector`/`dashboard`/`api`/`peakflow`）**必须用 `-m` 运行**：模块内使用 `from collector import ...` / `from dashboard import ...`，直接运行 `.py` 文件会把子目录（而非项目根）放进 `sys.path`，报 `ModuleNotFoundError`。
@@ -28,7 +28,7 @@ AutoWFM/
 │   ├── detail.py       # 2 路 CRM 明细导出 + Excel 解析 + 按组计数
 │   ├── repository.py   # 存储层（SQLite 实现，SCHEMAS 单一事实源；insert/ensure_index + 只读 Repository）
 │   ├── metrics.py      # 指标口径单一事实源（流入率/接通率 pct、卡片拼装、预估流入量 CSV 缓存读取）
-│   ├── maintenance.py  # 磁盘维护（日志归档保留、output 按日目录清理、SQLite VACUUM；dry-run 优先）
+│   ├── maintenance.py  # 轮转日志归档清理（只处理 logs/，不触碰业务数据）
 │   ├── backfill.py     # 历史数据补全
 │   ├── notify.py       # 企微告警 + 定时报告 + 看板截图
 │   └── _utils.py       # config/.env 加载、时间工具
@@ -106,11 +106,11 @@ Get-ChildItem tests\test_*.py | ForEach-Object { .\.venv\Scripts\python.exe $_.F
 - 常用环境变量：`AUTOWFM_TOKEN` / `AUTOWFM_TENEMENT_ID`（CRM 导出）、`AUTOWFM_WEBHOOK_MAIN` / `AUTOWFM_WEBHOOK_SECONDARY`（企微）、`AUTOWFM_DASH_TOKEN`（看板/API Bearer，留空=本地无认证）。
 - 业务配置（端点、时间窗口、线路 subs、告警阈值、预测参数）在 `config.yaml`。
 
-## 磁盘维护与日志保留
+## 日志保留与自动清理
 
 - **日志轮转**：`logs/manager.log` 由 `manager.py` 的 `setup_logging()` 用 `TimedRotatingFileHandler` **按天轮转**，保留最近 `maintenance.manager_log_backup_count` 份（缺省 14）；看板/API 等子进程的 stdout 日志在每次启动前按 `maintenance.child_log_max_mb`（缺省 5MB）**按大小轮转**（`.log` → `.log.1`）。采集器日志另有既有的轮转。
-- **保留策略**：`maintenance.keep_days`（缺省 30）控制 `logs/` 轮转归档与 `output/` 按日目录的保留天数，超期即列为可清理。
-- **维护页**：`manager.py`「磁盘维护」页可先 **分析（dry-run，不删除任何文件）**，确认后再 **执行清理**（删除过期归档 / 产物目录，并对 `data/*.db` 执行 `VACUUM` 回收空洞）。删除逐文件进行，正在写入的 `.log` 永不入选。
+- **保留策略**：`maintenance.keep_days`（缺省 30）控制 `logs/` 轮转归档保留天数，只删除超过期限的 `x.log.YYYY-MM-DD` 与 `x.log.N`；正在写入的 `.log` 永不入选。
+- **自动清理**：管理器每天本地时间 05:00 在后台静默执行一次；当天 05:00 后才启动管理器时补跑。同日重启管理器可能重新扫描一次，但删除幂等。`output/` 与 `data/*.db` 不做任何调整。
 
 ## 数据说明
 
