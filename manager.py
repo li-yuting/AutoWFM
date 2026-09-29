@@ -269,6 +269,15 @@ def parse_schedule(s: str):
     return t.hour * 60 + t.minute
 
 
+def parse_limit(s) -> int | None:
+    """接待上限字符串 → int；接受 0 和正整数，其余（空/负数/非数字）返回 None。"""
+    try:
+        v = int(str(s).strip())
+    except (ValueError, AttributeError):
+        return None
+    return v if v >= 0 else None
+
+
 def schedule_action(enabled: bool, now_mins: int, sched_mins, fired: bool) -> str:
     """单次预约状态机：'wait'（等待到点）| 'run'（到点触发）|
     'expired'（时间已过，跳过）| 'idle'（未启用/已触发/时间非法）。"""
@@ -1102,7 +1111,7 @@ class ManagerUI:
         self.ml_box.configure(state=tk.DISABLED)
         self._box_set(
             self.ml_box,
-            "手动执行：填上限值后点「开始执行」；运行中可点「停止」逐人中断。\n"
+            "手动执行：填上限值（0 或正整数）后点「开始执行」；运行中可点「停止」逐人中断。\n"
             "预约执行：勾选启用 + 填 HH:MM 时间与上限值，到点自动执行一次后清除。\n"
             "日志同时写入 logs/member_limit.log。")
 
@@ -1110,10 +1119,9 @@ class ManagerUI:
         self._box_append(self.ml_box, text, MEMBER_LIMIT_LOG)
 
     def _manual_member_limit(self) -> None:
-        try:
-            limit = int(self.ml_limit_var.get().strip())
-        except ValueError:
-            self.ml_status_var.set("上限需为数字")
+        limit = parse_limit(self.ml_limit_var.get())
+        if limit is None:
+            self.ml_status_var.set("上限需为 0 或正整数")
             return
         self._run_member_limit(limit, "手动执行")
 
@@ -1122,9 +1130,9 @@ class ManagerUI:
         if self._ml_running:
             self._append_member_limit_text(f"[{label}] 已有执行在跑，本次触发跳过")
             return False
-        if limit <= 0:
+        if limit < 0:
             self.ml_status_var.set("上限无效")
-            self._append_member_limit_text(f"[{label}] 上限需为正整数")
+            self._append_member_limit_text(f"[{label}] 上限需为 0 或正整数")
             return False
         members = (self.cfg.get("member_limit") or {}).get("members") or []
         if not members:
@@ -1198,13 +1206,11 @@ class ManagerUI:
             elif action == "run":
                 st["fired"] = True
                 st["status"].set("执行中")
-                try:
-                    limit = int(st["limit"].get().strip() or 0)
-                except ValueError:
-                    limit = 0
-                if limit <= 0:
+                limit = parse_limit(st["limit"].get())
+                if limit is None:
                     st["status"].set("已取消(上限无效)")
-                    self._append_member_limit_text(f"[预约 {st['time'].get()}] 上限无效，已取消本次")
+                    self._append_member_limit_text(
+                        f"[预约 {st['time'].get()}] 上限无效（需为 0 或正整数），已取消本次")
                     continue
                 self._append_member_limit_text(f"[预约 {st['time'].get()}] 到点自动执行，上限={limit}")
                 started = self._run_member_limit(limit, f"预约 {st['time'].get()}")
