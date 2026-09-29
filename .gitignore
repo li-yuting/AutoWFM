@@ -48,6 +48,7 @@ Thumbs.db
 .superpowers/
 .worktrees/
 .workbuddy/
+.dsh-vision-router/
 reasonix.toml
 面试准备.md
 # 本地操作笔记，不入库
