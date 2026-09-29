@@ -83,7 +83,7 @@ TASK = {
 新增 `task_registry.py`（根目录，~100 行）：
 
 - `discover(packages=("peakflow", "shift", "member_limit", "writeforecast")) -> list[dict]`：importlib 加载各 TASK
-- `validate(spec)`：callable 可导入、param 字段合法、`schedulable` 任务的定时时段配置（来自 config.yaml）可被 `parse_schedule` 解析；**单任务校验失败 → 跳过该任务 + manager 日志告警，不影响其他任务与主数据链页面**
+- `validate(spec)`：字段结构级校验（必填字段、kind、param 类型、callable 字符串格式）；callable 的可导入性由 `tests/test_taskspec.py` 断言，运行期导入失败由页面显示错误（避免 manager 启动时 import pandas/playwright 等重依赖）；**单任务校验失败 → 跳过该任务 + manager 日志告警，不影响其他任务与主数据链页面**
 
 `manager.py`：
 
@@ -92,7 +92,7 @@ TASK = {
   - 按 `params` 自动生成表单（int/str → Entry，select → Combobox）
   - 「运行」→ 校验参数 → kwargs → 复用现有 `_run_bg` → 完成显示摘要 / 失败显示错误
   - `schedulable` 时附定时时段 UI：`parse_schedule` / `schedule_action` / 时段检查循环从 member_limit 专用提到通用层
-  - `kind="service"` → 页面 = 启动/停止/重启 + 状态 + 「打开页面」（走现有 ManagedTask）
+  - `kind="service"` → 不新建页面：由 taskspec 生成 ManagedTask 加入现有顶部进程条与日志页（启动/停止/重启/状态/日志全复用），进程条上按 `url` 增加「打开页面」按钮
 - 主数据链页面（采集器/看板/API 进程、数据补全、明细导出、日志）原样保留
 
 **扩展性兑现点**：以后新增功能型子系统 = 建包 + 写 taskspec.py，manager 零改动。
