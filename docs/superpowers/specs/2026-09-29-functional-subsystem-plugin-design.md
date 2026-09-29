@@ -17,7 +17,7 @@ AutoWFM 现状（见 `docs/autowfm-flow.html`）：主数据链（collector → 
 
 **纳入**：peakflow、shift、member_limit、writeforecast 四个功能型子系统 + manager.py 中它们的页面与启动逻辑。
 
-**不动**：collector / dashboard / api 主数据链（含 manager 中数据补全页、明细导出页、日志页、主进程守护页）；各子系统内部实现代码；config.yaml 键结构；测试风格（plain assert）。
+**不动**：collector / dashboard / api 主数据链（含 manager 中数据补全页、明细导出页、日志页、主进程守护页）；各子系统的业务逻辑；config.yaml 键结构；测试风格（plain assert）。
 
 **兼容底线**（用户确认）：
 - `data/`、`output/`、`data/预估流入量.csv` 等数据与产物路径不变
@@ -35,10 +35,20 @@ AutoWFM 现状（见 `docs/autowfm-flow.html`）：主数据链（collector → 
 
 | 子系统 | 现状 | 改后 |
 |---|---|---|
-| peakflow | `python -m peakflow.main --fetch` ✅ | 不动；`main.py` 补 `main(argv) -> int` 退出码 |
-| member_limit | manager 内线程 import 调用 | 包内补 `__main__.py`，manager 与 CLI 共用同一 `run(limit)` 入口 |
-| shift | manager 用 runpy + sys.path hack 启动 | 包内补 `__main__.py`（内部做 sys.path 自保）；manager 改为普通 `python -m shift` ManagedTask，删除 `_SHIFT_PRE_RUN` hack |
-| writeforecast | 两个独立裸脚本 | 转为包：`__init__.py` + `__main__.py`（子命令 `forecast` / `shifts`，薄包装，脚本本体几乎不动） |
+| peakflow | `python -m peakflow.main --fetch` ✅，骨架已合规 | 不动 |
+| member_limit | `main(argv)->int` 已有；manager 内线程 import 调用 | 补 `__main__.py`（2 行转发），manager 与 CLI 共用同一入口 |
+| shift | `main()->int` 缺 argv 参数；manager 用 runpy + sys.path hack 启动 | `main()` 补 `argv=None`；补 `__main__.py`（内部做 sys.path 自保）；manager 改为普通 `python -m shift` ManagedTask，删除 `_SHIFT_PRE_RUN` hack |
+| writeforecast | 两个独立裸脚本，`__main__` 块里散写 sys.exit | 转为包：`__init__.py` + `__main__.py`（子命令 `forecast` / `shifts`），两脚本各抽 `main(argv)->int`，文件搬运与抽函数为主 |
+
+### 1.5 统一骨架模式
+
+以 peakflow / member_limit 现有模式为准（不新发明），四个子系统统一为：
+
+1. 入口函数 `main(argv: list[str] | None = None) -> int`：argparse 解析，异常在 main 层收敛为退出码（0 成功 / 非 0 失败）
+2. 包根 `__main__.py` 一律为薄转发（`from .main import main` + `sys.exit(main())`；writeforecast 为子命令分发）
+3. 业务入口是可 import 的函数（如 `run_forecast(fetch)`），CLI 与 manager 共用，不各自复制调用逻辑
+4. 配置读取集中在包内 `config.py`（`load_dotenv()` + `yaml.safe_load`，member_limit 现有模式），业务模块不各自 load
+5. 业务逻辑、命名、注释风格**不动**；不引入 formatter/linter
 
 ### 2. 子系统契约：taskspec.py
 
@@ -98,7 +108,7 @@ TASK = {
 
 测试（plain assert，无 pytest）：
 
-- `tests/test_taskspec.py`：四个 TASK 声明齐全、字段合法、callable 可导入、schedules 可被 `parse_schedule` 解析
+- `tests/test_taskspec.py`：四个 TASK 声明齐全、字段合法、callable 可导入、schedules 可被 `parse_schedule` 解析；各包暴露 `main(argv=None) -> int` 骨架（签名断言）
 - `tests/test_task_registry.py`：discover 加载 / 坏 spec 隔离 / 参数校验
 - `tests/test_manager.py` 增补：通用页参数解析、schedule 通用化回归
 - 各 `__main__.py`：`--help` 级冒烟断言（不起真实任务）
@@ -107,7 +117,7 @@ TASK = {
 ## 明确不做（YAGNI）
 
 - 不引入 click / pydantic / 插件框架（dict + importlib 足够）
-- 不统一四个子系统内部代码风格
+- 不引入 formatter/linter；不统一命名、注释等表面风格，骨架之外的业务代码一行不动
 - 不改 config.yaml 键结构、不动数据链任何文件
 - 不做子系统间依赖编排、任务队列、Web 版管理器
 
