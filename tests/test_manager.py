@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from manager import (compute_auto_start, auto_stop_minutes, in_run_window, schedule_text,
                        ManagerUI, ManagedTask, GRACE_SECONDS, parse_schedule, schedule_action,
-                       load_auto_start_state, save_auto_start_state,
+                       load_auto_start_state, save_auto_start_state, parse_limit,
                        log_prune_due)
 
 SH = ZoneInfo("Asia/Shanghai")
@@ -24,6 +24,7 @@ def _cfg():
                                             "weekend": {"start": "09:00", "end": "18:00"}}},
             {"name": "在线"},
         ],
+        "storage": {"dir": "data"},
     }
 
 
@@ -258,8 +259,8 @@ def test_ui_constructs():
         ui = ManagerUI(root, _cfg())
         try:
             labels = [btn.cget("text") for btn in ui._nav_buttons]
-            assert len(ui._nav_buttons) == 6, f"6 个导航按钮, 实际 {len(ui._nav_buttons)}"
-            assert len(ui._nav_pages) == 6, f"6 个内容页, 实际 {len(ui._nav_pages)}"
+            assert len(ui._nav_buttons) == 8, f"8 个导航按钮, 实际 {len(ui._nav_buttons)}"
+            assert len(ui._nav_pages) == 8, f"8 个内容页, 实际 {len(ui._nav_pages)}"
             assert len(ui._log_boxes) == 4, f"4 个日志框, 实际 {len(ui._log_boxes)}"
             assert "磁盘维护" not in labels, labels
         finally:
@@ -307,6 +308,15 @@ def test_update_status_states():
         finally:
             root.destroy()
     print("update_status_states OK")
+
+
+def test_parse_limit_accepts_zero_and_positive():
+    """接待上限接受 0 与正整数；空/负数/非数字一律无效。"""
+    assert parse_limit("0") == 0
+    assert parse_limit(" 5 ") == 5
+    assert parse_limit("10") == 10
+    for bad in ("", "   ", "-1", "abc", "1.5", None):
+        assert parse_limit(bad) is None, bad
 
 
 def test_member_limit_schedule_rearm():
@@ -550,6 +560,7 @@ def main():
     test_ui_constructs()
     test_update_status_sets_dot()
     test_update_status_states()
+    test_parse_limit_accepts_zero_and_positive()
     test_member_limit_schedule_rearm()
     test_tick_auto_start_requires_checkbox()
     test_auto_start_state_roundtrip()
