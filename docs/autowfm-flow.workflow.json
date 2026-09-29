@@ -8,62 +8,79 @@
   },
   "lanes": [
     { "id": "guard", "label": "守护与调度" },
+    { "id": "tools", "label": "管理器工具" },
     { "id": "collect", "label": "采集" },
     { "id": "exception", "label": "异常与自愈", "variant": "exception" },
     { "id": "store", "label": "存储" },
     { "id": "process", "label": "口径加工" },
     { "id": "serve", "label": "消费" },
-    { "id": "deliver", "label": "推送" }
+    { "id": "deliver", "label": "推送与告警" }
   ],
   "phases": [
     { "id": "trigger", "label": "守护与触发", "fromCol": 0, "toCol": 1 },
     { "id": "ingest", "label": "采集与落库", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
     { "id": "consume", "label": "口径与消费", "fromCol": 4, "toCol": 4 },
-    { "id": "push", "label": "推送与输出", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+    { "id": "push", "label": "输出与推送", "fromCol": 5, "toCol": 5, "variant": "dashed" }
   ],
   "mainPath": ["mgr", "sched", "ws", "db", "metrics", "notify"],
   "nodes": [
     { "id": "mgr", "lane": "guard", "col": 0, "type": "backend", "label": "AutoWFM", "sublabel": "管理器 · 守护子进程", "width": 96 },
     { "id": "sched", "lane": "guard", "col": 2, "type": "backend", "label": "周期调度", "sublabel": "APScheduler", "width": 116 },
+    { "id": "backfill", "lane": "tools", "col": 0, "type": "backend", "label": "数据补全", "sublabel": "回填 5 分钟快照", "width": 96 },
+    { "id": "peakflow", "lane": "tools", "col": 1, "type": "backend", "label": "进线量预测", "sublabel": "peakflow 30 天", "width": 116 },
+    { "id": "member_limit", "lane": "tools", "col": 4, "type": "external", "label": "接待上限", "sublabel": "改腾讯云坐席", "width": 116 },
+    { "id": "shift", "lane": "tools", "col": 5, "type": "backend", "label": "排班", "sublabel": "Flask :5000", "width": 100 },
     { "id": "ws", "lane": "collect", "col": 2, "type": "backend", "label": "WS 实时采集", "sublabel": "collector/ws.py", "width": 116 },
     { "id": "detail", "lane": "collect", "col": 3, "type": "backend", "label": "CRM 明细导出", "sublabel": "collector/detail.py", "width": 110 },
     { "id": "token", "lane": "exception", "col": 4, "type": "security", "label": "Token 自动刷新", "sublabel": "刷新并重试一次", "width": 116 },
     { "id": "db", "lane": "store", "col": 2, "type": "database", "label": "SQLite 库", "sublabel": "每源一库 · data/*.db", "width": 116 },
+    { "id": "writeforecast", "lane": "store", "col": 3, "type": "backend", "label": "周度预估", "sublabel": "writeforecast.py", "width": 110 },
     { "id": "fcsv", "lane": "store", "col": 5, "type": "database", "label": "预估流入量", "sublabel": "data/预估流入量.csv", "width": 100 },
-    { "id": "metrics", "lane": "process", "col": 4, "type": "backend", "label": "指标口径", "sublabel": "collector/metrics.py", "width": 100 },
+    { "id": "metrics", "lane": "process", "col": 4, "type": "backend", "label": "指标口径", "sublabel": "collector/metrics.py", "width": 110 },
     { "id": "api", "lane": "serve", "col": 2, "type": "backend", "label": "只读 API", "sublabel": "FastAPI :8081", "width": 116 },
+    { "id": "export", "lane": "serve", "col": 3, "type": "backend", "label": "导出 CSV", "sublabel": "repository.export_csv", "width": 110 },
     { "id": "dash", "lane": "serve", "col": 5, "type": "frontend", "label": "看板", "sublabel": "Flask :8080", "width": 100 },
-    { "id": "notify", "lane": "deliver", "col": 4, "type": "messagebus", "label": "企微推送", "sublabel": "collector/notify.py", "width": 100 }
+    { "id": "alerts", "lane": "deliver", "col": 1, "type": "messagebus", "label": "告警推送", "sublabel": "排队 / 停滞阈值", "width": 96 },
+    { "id": "notify", "lane": "deliver", "col": 4, "type": "messagebus", "label": "企微报表", "sublabel": "collector/notify.py", "width": 110 }
   ],
   "edges": [
-    { "from": "mgr", "to": "sched", "label": "拉起采集器", "role": "main", "variant": "emphasis" },
-    { "from": "sched", "to": "ws", "label": "每 5 分钟", "role": "main" },
+    { "from": "mgr", "to": "sched", "label": "拉起采集器", "role": "main", "variant": "emphasis", "via": [[189, 119]], "fromSide": "right", "toSide": "left", "labelAt": [189, 106] },
+    { "from": "mgr", "to": "backfill", "label": "数据补全", "role": "branch" },
+    { "from": "mgr", "to": "peakflow", "label": "运行预测", "role": "branch" },
+    { "from": "mgr", "to": "member_limit", "label": "批量改上限", "role": "branch", "route": "up-channel", "fromSide": "top", "toSide": "top", "channelY": 74, "labelSegment": 2 },
+    { "from": "mgr", "to": "shift", "label": "启动排班", "role": "branch", "route": "up-channel", "fromSide": "top", "toSide": "top", "channelY": 62, "labelSegment": 2 },
+    { "from": "sched", "to": "ws", "label": "每 5 分钟", "role": "main", "labelAt": [300, 168] },
     { "from": "sched", "to": "detail", "label": "每 5 分钟", "role": "main" },
     { "from": "ws", "to": "db", "label": "repository.insert", "role": "main" },
     { "from": "detail", "to": "db", "label": "按组计数", "role": "main", "labelDy": 24 },
+    { "from": "backfill", "to": "db", "label": "覆盖写历史", "role": "branch" },
     { "from": "detail", "to": "token", "label": "登录态失效", "role": "error", "variant": "dashed" },
+    { "from": "writeforecast", "to": "fcsv", "label": "周度预估 Excel", "role": "branch", "route": "straight", "fromSide": "right", "toSide": "left" },
     { "from": "db", "to": "metrics", "label": "只读取数", "role": "main" },
     { "from": "fcsv", "to": "metrics", "label": "累计预估量", "role": "branch" },
     { "from": "metrics", "to": "dash", "label": "看板聚合", "role": "main" },
     { "from": "db", "to": "api", "label": "只读消费", "role": "branch" },
-    { "from": "metrics", "to": "notify", "label": "定时报表", "role": "main" },
+    { "from": "db", "to": "export", "label": "导出全源", "role": "branch" },
+    { "from": "db", "to": "alerts", "label": "排队 / 停滞判定", "role": "error", "variant": "dashed", "via": [[220, 615]], "fromSide": "left", "toSide": "top" },
+    { "from": "metrics", "to": "notify", "label": "定时报表", "role": "main", "labelDx": 30 },
     { "from": "dash", "to": "notify", "label": "全页截图", "role": "main" }
   ],
   "cards": [
     { "dot": "cyan", "title": "采集与落库", "items": [
       "collector/ws.py 单屏单帧采集 7 路源，失败源延迟 5s 补采一次",
-      "collector/detail.py 下载 CRM Excel，按组前缀折叠计数，空表跳过不覆盖",
-      "collector/repository.py 每源一个 SQLite 库、一张表 t，列名即 SCHEMAS"
+      "collector/detail.py 下载 CRM Excel 按组前缀折叠计数，空表跳过不覆盖",
+      "collector/backfill.py 按 5 分钟分桶重建历史累计快照，当天只补过去时段"
     ] },
     { "dot": "emerald", "title": "消费与推送", "items": [
-      "看板 :8080 与 API :8081 都直连 data/*.db，两者互不调用",
+      "看板 :8080 与 API :8081 都直连 data/*.db，用 Bearer AUTOWFM_DASH_TOKEN 认证",
       "collector/metrics.py 是流入率/接通率与卡片拼装的唯一实现",
       "每 15 分钟推送 markdown 报表 + 看板全页截图到两路企微 webhook"
     ] },
-    { "dot": "amber", "title": "辅助子系统与自愈", "items": [
-      "peakflow 每天 09:30 预测未来 30 天，shift 排班由管理器纯手动启动",
-      "member_limit 用 Playwright 批量改腾讯云联络中心成员接待上限",
-      "管理器在 05:00 静默清理过期日志；连续 3 次启动失败即熔断并弹窗告警"
+    { "dot": "amber", "title": "告警、工具与自愈", "items": [
+      "排队阈值 热线 10 / 在线 20 / 12378 1；转人工量连续两周期不变即艾特负责人",
+      "某源连续 5 周期无数据发采集缺口告警；token 失效自动刷新并回写 .env",
+      "peakflow 09:30 出 Excel + HTML；shift 上传班表出排班结果；member_limit 写腾讯云",
+      "管理器 05:00 静默清理过期日志；连续 3 次启动失败即熔断并弹窗告警"
     ] }
   ]
 }
